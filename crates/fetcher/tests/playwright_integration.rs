@@ -4,8 +4,8 @@
 ///   cargo test -p stillo-fetcher --test playwright_integration
 ///
 /// テスト内でデーモンプロセスを自動起動・停止する。
+///
 /// playwright-daemon/node_modules が存在しない場合はスキップされる。
-
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -55,7 +55,9 @@ async fn start_spa_test_server() -> u16 {
             let (mut stream, _) = listener.accept().await.unwrap();
             tokio::spawn(async move {
                 let mut buf = [0u8; 4096];
-                stream.read(&mut buf).await.ok();
+                // リクエストの先頭行だけ読めば十分（UI 側の判定に使わない）。切断は許容。
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let _ = n;
 
                 let body = r#"<!DOCTYPE html>
 <html>
@@ -98,13 +100,18 @@ async fn start_daemon(socket_path: &Path) -> tokio::process::Child {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    panic!("Playwright デーモンがソケットを作成しませんでした: {:?}", socket_path);
+    panic!(
+        "Playwright デーモンがソケットを作成しませんでした: {:?}",
+        socket_path
+    );
 }
 
 #[tokio::test]
 async fn test_playwright_fetches_js_rendered_content() {
     if !daemon_installed() {
-        eprintln!("playwright-daemon/node_modules が見つかりません。npm install を実行してください。");
+        eprintln!(
+            "playwright-daemon/node_modules が見つかりません。npm install を実行してください。"
+        );
         return;
     }
 
@@ -146,10 +153,7 @@ async fn test_playwright_returns_error_for_unreachable_url() {
 
     let _ = std::fs::remove_file(&socket_path);
 
-    assert!(
-        result.is_err(),
-        "到達不能 URL でエラーになるべきです"
-    );
+    assert!(result.is_err(), "到達不能 URL でエラーになるべきです");
 }
 
 #[tokio::test]
@@ -158,8 +162,5 @@ async fn test_playwright_error_when_daemon_not_running() {
     let url = "https://example.com".parse().unwrap();
     let result = stillo_fetcher::spa::playwright::fetch_via_playwright(&socket_path, &url).await;
 
-    assert!(
-        result.is_err(),
-        "デーモン未起動時はエラーになるべきです"
-    );
+    assert!(result.is_err(), "デーモン未起動時はエラーになるべきです");
 }
