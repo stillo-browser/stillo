@@ -1,8 +1,7 @@
 use anyhow::Result;
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers,
-        MouseEventKind,
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind,
     },
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
@@ -35,9 +34,9 @@ pub enum TuiResult {
 
 enum BrowserMode {
     Normal,
-    SearchInput(String),   // ページ内テキスト検索（/）
-    WebSearch(String),     // DuckDuckGo 検索（s）
-    UrlInput(String),      // URL直接入力（U）
+    SearchInput(String), // ページ内テキスト検索（/）
+    WebSearch(String),   // DuckDuckGo 検索（s）
+    UrlInput(String),    // URL直接入力（U）
     Help,
 }
 
@@ -104,7 +103,11 @@ impl TuiBrowser {
         let result = self.event_loop(&mut terminal);
 
         terminal::disable_raw_mode()?;
-        execute!(terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen)?;
+        execute!(
+            terminal.backend_mut(),
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        )?;
         terminal.show_cursor()?;
 
         result
@@ -384,7 +387,13 @@ impl TuiBrowser {
             (self.view.scroll_offset * 100 / max_offset).min(100)
         };
 
-        render_status_bar(f, chunks[0], &self.page.title, self.page.url.as_str(), scroll_pct);
+        render_status_bar(
+            f,
+            chunks[0],
+            &self.page.title,
+            self.page.url.as_str(),
+            scroll_pct,
+        );
 
         // 検索マッチのハイライト描画
         let current_match = self.search_matches.get(self.search_cursor).cloned();

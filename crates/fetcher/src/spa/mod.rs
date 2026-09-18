@@ -3,11 +3,11 @@ pub mod firecrawl;
 pub mod jina;
 pub mod playwright;
 
-use std::path::PathBuf;
 use reqwest::{Client, ClientBuilder};
+use std::path::PathBuf;
 use std::time::Duration;
-use url::Url;
 use stillo_core::document::{DelegationTarget, FetchError, RawHtml};
+use url::Url;
 
 pub struct SpaDelegationChain {
     targets: Vec<DelegationTarget>,

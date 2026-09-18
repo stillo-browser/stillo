@@ -1,9 +1,12 @@
-use std::mem::take;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
-use stillo_core::{Block, Document, Inline, document::{ExtractedContent, ExtractedLink}}; // ExtractedContent は from_content ラッパーで使用
+use std::mem::take;
+use stillo_core::{
+    document::{ExtractedContent, ExtractedLink},
+    Block, Document, Inline,
+}; // ExtractedContent は from_content ラッパーで使用
 use url::Url;
 
 const WRAP_WIDTH: usize = 80;
@@ -107,8 +110,11 @@ impl ContentView {
     /// 行全体を上書きするのではなく span 範囲だけを変えることで、
     /// 通常テキストのスタイルを保持できる。
     fn rebuild_link_highlights(&mut self) {
-        for (pos_idx, (&(line_idx, _), &(_, span_start, span_end))) in
-            self.link_positions.iter().zip(self.link_span_ranges.iter()).enumerate()
+        for (pos_idx, (&(line_idx, _), &(_, span_start, span_end))) in self
+            .link_positions
+            .iter()
+            .zip(self.link_span_ranges.iter())
+            .enumerate()
         {
             let is_selected = self.selected_link == Some(pos_idx);
             let style = if is_selected {
@@ -178,10 +184,17 @@ impl<'a> DocRenderer<'a> {
             match block {
                 Block::Heading { level, inlines } => self.render_heading(*level, inlines),
                 Block::Paragraph(inlines) => self.render_paragraph(inlines),
-                Block::ListItem { depth, ordered, number, inlines } => {
+                Block::ListItem {
+                    depth,
+                    ordered,
+                    number,
+                    inlines,
+                } => {
                     self.render_list_item(*depth, *ordered, *number, inlines);
                 }
-                Block::CodeBlock { lang, content } => self.render_code_block(lang.as_deref(), content),
+                Block::CodeBlock { lang, content } => {
+                    self.render_code_block(lang.as_deref(), content)
+                }
                 Block::Blockquote(inlines) => self.render_blockquote(inlines),
                 Block::Rule => self.render_rule(),
             }
@@ -198,7 +211,9 @@ impl<'a> DocRenderer<'a> {
                 // タイトル行
                 let title_line = Line::from(Span::styled(
                     text.clone(),
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                 ));
                 self.lines.push(title_line);
                 // アンダーライン
@@ -218,14 +233,18 @@ impl<'a> DocRenderer<'a> {
                 let full = format!("{}{}", inner, pad);
                 self.lines.push(Line::from(Span::styled(
                     full,
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 )));
             }
             3 => {
                 let full = format!("▸ {}", text);
                 self.lines.push(Line::from(Span::styled(
                     full,
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 )));
             }
             _ => {
@@ -253,10 +272,8 @@ impl<'a> DocRenderer<'a> {
             format!("{}• ", "  ".repeat(depth.saturating_sub(1)))
         };
         let prefix_len = prefix.chars().count();
-        self.current_spans.push(Span::styled(
-            prefix,
-            Style::default().fg(Color::DarkGray),
-        ));
+        self.current_spans
+            .push(Span::styled(prefix, Style::default().fg(Color::DarkGray)));
         self.current_len += prefix_len;
         let remaining = WRAP_WIDTH.saturating_sub(prefix_len);
         self.render_inlines(inlines, Style::default(), remaining);
@@ -268,11 +285,16 @@ impl<'a> DocRenderer<'a> {
         self.push_empty_line();
 
         // 上境界線: ╭─ {lang} ─────╮
-        let lang_label = lang.map(|l| format!(" {} ", l)).unwrap_or_else(|| " ".to_owned());
+        let lang_label = lang
+            .map(|l| format!(" {} ", l))
+            .unwrap_or_else(|| " ".to_owned());
         let border_inner_len = CODE_WIDTH + 2; // "─ " + content + " ─"
         let lang_pad = border_inner_len.saturating_sub(lang_label.chars().count() + 1);
         let top = format!("╭─{}{}╮", lang_label, "─".repeat(lang_pad));
-        self.lines.push(Line::from(Span::styled(top, Style::default().fg(Color::DarkGray))));
+        self.lines.push(Line::from(Span::styled(
+            top,
+            Style::default().fg(Color::DarkGray),
+        )));
 
         // コンテンツ行
         for line in content.lines() {
@@ -288,7 +310,10 @@ impl<'a> DocRenderer<'a> {
 
         // 下境界線: ╰──────────╯
         let bottom = format!("╰{}╯", "─".repeat(CODE_WIDTH + 2));
-        self.lines.push(Line::from(Span::styled(bottom, Style::default().fg(Color::DarkGray))));
+        self.lines.push(Line::from(Span::styled(
+            bottom,
+            Style::default().fg(Color::DarkGray),
+        )));
 
         self.push_empty_line();
     }
@@ -296,7 +321,8 @@ impl<'a> DocRenderer<'a> {
     fn render_blockquote(&mut self, inlines: &[Inline]) {
         self.push_empty_line();
         // 先頭に引用プレフィックスを追加してからインライン展開する
-        self.current_spans.push(Span::styled("▎ ", Style::default().fg(Color::Cyan)));
+        self.current_spans
+            .push(Span::styled("▎ ", Style::default().fg(Color::Cyan)));
         self.current_len += 2;
         let italic_style = Style::default().add_modifier(Modifier::ITALIC);
         self.render_inlines(inlines, italic_style, WRAP_WIDTH.saturating_sub(2));
@@ -344,10 +370,8 @@ impl<'a> DocRenderer<'a> {
                         self.current_spans.push(Span::raw(" "));
                         self.current_len += 1;
                     }
-                    self.current_spans.push(Span::styled(
-                        display,
-                        Style::default().fg(Color::Yellow),
-                    ));
+                    self.current_spans
+                        .push(Span::styled(display, Style::default().fg(Color::Yellow)));
                     self.current_len += display_len;
                 }
                 Inline::Link { text, href } => self.push_link(text, href, wrap_width),
@@ -364,14 +388,16 @@ impl<'a> DocRenderer<'a> {
             let total = word_len + if need_space { 1 } else { 0 };
             if self.current_len > 0 && self.current_len + total > wrap_width {
                 self.flush_line();
-                self.current_spans.push(Span::styled(word.to_owned(), style));
+                self.current_spans
+                    .push(Span::styled(word.to_owned(), style));
                 self.current_len = word_len;
             } else {
                 if need_space {
                     self.current_spans.push(Span::raw(" "));
                     self.current_len += 1;
                 }
-                self.current_spans.push(Span::styled(word.to_owned(), style));
+                self.current_spans
+                    .push(Span::styled(word.to_owned(), style));
                 self.current_len += word_len;
             }
         }
@@ -407,10 +433,8 @@ impl<'a> DocRenderer<'a> {
         }
 
         let span_start = self.current_spans.len();
-        self.current_spans.push(Span::styled(
-            label,
-            Style::default().fg(Color::Cyan),
-        ));
+        self.current_spans
+            .push(Span::styled(label, Style::default().fg(Color::Cyan)));
         if !trimmed_text.is_empty() {
             self.current_spans.push(Span::raw(" "));
             self.current_spans.push(Span::styled(

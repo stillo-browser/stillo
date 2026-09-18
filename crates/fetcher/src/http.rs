@@ -1,7 +1,7 @@
+use reqwest::{redirect, Client, ClientBuilder};
 use std::time::Duration;
-use reqwest::{Client, ClientBuilder, redirect};
-use url::Url;
 use stillo_core::document::{FetchError, RawHtml};
+use url::Url;
 
 pub struct HttpConfig {
     pub timeout_secs: u64,
@@ -76,7 +76,11 @@ impl HttpFetcher {
         self.fetch_inner(url, headers).await
     }
 
-    async fn fetch_inner(&self, url: &Url, extra_headers: &[(&str, &str)]) -> Result<RawHtml, FetchError> {
+    async fn fetch_inner(
+        &self,
+        url: &Url,
+        extra_headers: &[(&str, &str)],
+    ) -> Result<RawHtml, FetchError> {
         let mut request = self.client.get(url.as_str());
         for (name, value) in extra_headers {
             request = request.header(*name, *value);
@@ -108,7 +112,11 @@ impl HttpFetcher {
         let final_url = response.url().clone();
         let final_url = Url::parse(final_url.as_str()).unwrap_or_else(|_| url.clone());
 
-        let bytes = response.bytes().await.map_err(|e| FetchError::Tls(e.to_string()))?.to_vec();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| FetchError::Tls(e.to_string()))?
+            .to_vec();
 
         Ok(RawHtml {
             bytes,

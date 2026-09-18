@@ -1,9 +1,9 @@
-use url::Url;
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use crate::{
     ast::{Block, Document, Inline},
     document::{BrowsePage, ExtractedLink},
 };
+use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use url::Url;
 
 /// Markdown テキストを BrowsePage に変換する。
 pub fn parse_markdown_to_ast(text: &str, url: &Url) -> BrowsePage {
@@ -25,7 +25,11 @@ pub fn parse_markdown_to_ast(text: &str, url: &Url) -> BrowsePage {
             Event::End(TagEnd::Heading(_)) => {
                 if let Some(block) = context.exit_heading() {
                     // 最初の H1 をページタイトルとして記録する
-                    if let Block::Heading { level: 1, ref inlines } = block {
+                    if let Block::Heading {
+                        level: 1,
+                        ref inlines,
+                    } = block
+                    {
                         if first_h1.is_none() {
                             first_h1 = Some(inlines_to_plain(inlines));
                         }
@@ -63,7 +67,11 @@ pub fn parse_markdown_to_ast(text: &str, url: &Url) -> BrowsePage {
                 let lang = match kind {
                     pulldown_cmark::CodeBlockKind::Fenced(ref s) => {
                         let s = s.trim();
-                        if s.is_empty() { None } else { Some(s.to_string()) }
+                        if s.is_empty() {
+                            None
+                        } else {
+                            Some(s.to_string())
+                        }
                     }
                     pulldown_cmark::CodeBlockKind::Indented => None,
                 };
@@ -147,9 +155,7 @@ pub fn parse_markdown_to_ast(text: &str, url: &Url) -> BrowsePage {
     }
 
     // H1 がなければ URL パス部分をタイトルとして使う
-    let title = first_h1.unwrap_or_else(|| {
-        url.path().trim_matches('/').to_string()
-    });
+    let title = first_h1.unwrap_or_else(|| url.path().trim_matches('/').to_string());
 
     BrowsePage {
         title,
@@ -168,8 +174,14 @@ pub fn parse_markdown_to_ast(text: &str, url: &Url) -> BrowsePage {
 enum ContextKind {
     Heading(HeadingLevel),
     Paragraph,
-    ListItem { depth: usize, ordered: bool, number: usize },
-    CodeBlock { lang: Option<String> },
+    ListItem {
+        depth: usize,
+        ordered: bool,
+        number: usize,
+    },
+    CodeBlock {
+        lang: Option<String>,
+    },
     Blockquote,
 }
 
@@ -202,7 +214,9 @@ impl ParseContext {
     }
 
     fn in_code_block(&self) -> bool {
-        self.stack.iter().any(|k| matches!(k, ContextKind::CodeBlock { .. }))
+        self.stack
+            .iter()
+            .any(|k| matches!(k, ContextKind::CodeBlock { .. }))
     }
 
     fn in_strong(&self) -> bool {
@@ -237,7 +251,10 @@ impl ParseContext {
         if let Some(ContextKind::Heading(level)) = self.stack.pop() {
             let inlines = std::mem::take(&mut self.inline_buf);
             let level_u8 = heading_level_to_u8(level);
-            Some(Block::Heading { level: level_u8, inlines })
+            Some(Block::Heading {
+                level: level_u8,
+                inlines,
+            })
         } else {
             None
         }
@@ -282,13 +299,27 @@ impl ParseContext {
         } else {
             (false, 1)
         };
-        self.stack.push(ContextKind::ListItem { depth, ordered, number });
+        self.stack.push(ContextKind::ListItem {
+            depth,
+            ordered,
+            number,
+        });
     }
 
     fn exit_item(&mut self) -> Option<Block> {
-        if let Some(ContextKind::ListItem { depth, ordered, number }) = self.stack.pop() {
+        if let Some(ContextKind::ListItem {
+            depth,
+            ordered,
+            number,
+        }) = self.stack.pop()
+        {
             let inlines = std::mem::take(&mut self.inline_buf);
-            Some(Block::ListItem { depth, ordered, number, inlines })
+            Some(Block::ListItem {
+                depth,
+                ordered,
+                number,
+                inlines,
+            })
         } else {
             None
         }
@@ -361,7 +392,10 @@ impl ParseContext {
         };
 
         Some((
-            Inline::Link { text, href: href.to_string() },
+            Inline::Link {
+                text,
+                href: href.to_string(),
+            },
             Some(extracted),
         ))
     }
@@ -379,9 +413,16 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
 }
 
 fn inlines_to_plain(inlines: &[Inline]) -> String {
-    inlines.iter().map(|i| match i {
-        Inline::Text(s) | Inline::Bold(s) | Inline::Italic(s) | Inline::BoldItalic(s) | Inline::Code(s) => s.as_str(),
-        Inline::Link { text, .. } => text.as_str(),
-        Inline::SoftBreak => " ",
-    }).collect()
+    inlines
+        .iter()
+        .map(|i| match i {
+            Inline::Text(s)
+            | Inline::Bold(s)
+            | Inline::Italic(s)
+            | Inline::BoldItalic(s)
+            | Inline::Code(s) => s.as_str(),
+            Inline::Link { text, .. } => text.as_str(),
+            Inline::SoftBreak => " ",
+        })
+        .collect()
 }

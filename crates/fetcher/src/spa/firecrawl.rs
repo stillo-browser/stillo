@@ -1,7 +1,7 @@
 use reqwest::Client;
 use serde::Deserialize;
-use url::Url;
 use stillo_core::document::{FetchError, RawHtml};
+use url::Url;
 
 #[derive(Deserialize)]
 struct FirecrawlResponse {
@@ -50,7 +50,10 @@ pub async fn fetch_via_firecrawl(
 
     let status = resp.status().as_u16();
     if status >= 400 {
-        return Err(FetchError::Http { status, url: url.clone() });
+        return Err(FetchError::Http {
+            status,
+            url: url.clone(),
+        });
     }
 
     let result: FirecrawlResponse = resp
@@ -59,12 +62,15 @@ pub async fn fetch_via_firecrawl(
         .map_err(|e| FetchError::DelegationFailed(format!("firecrawl parse failed: {}", e)))?;
 
     if let Some(err) = result.error {
-        return Err(FetchError::DelegationFailed(format!("firecrawl error: {}", err)));
+        return Err(FetchError::DelegationFailed(format!(
+            "firecrawl error: {}",
+            err
+        )));
     }
 
-    let data = result.data.ok_or_else(|| {
-        FetchError::DelegationFailed("firecrawl returned empty data".into())
-    })?;
+    let data = result
+        .data
+        .ok_or_else(|| FetchError::DelegationFailed("firecrawl returned empty data".into()))?;
 
     // html フィールドがあればそれを使い、なければ markdown を <pre> で包む
     let html = if let Some(h) = data.html.filter(|h| !h.is_empty()) {

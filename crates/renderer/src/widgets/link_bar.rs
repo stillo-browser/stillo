@@ -21,7 +21,12 @@ pub fn render_hint_bar(
         let max_len = area.width.saturating_sub(4) as usize;
         let truncated = truncate_url(url, max_len);
         let line = Line::from(vec![
-            Span::styled(" → ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " → ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(truncated, Style::default().fg(Color::Cyan)),
         ]);
         let bar = Paragraph::new(line).style(Style::default().bg(Color::DarkGray));
@@ -36,16 +41,22 @@ pub fn render_hint_bar(
     };
 
     let back_style = if can_go_back {
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
     let fwd_style = if can_go_forward {
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let key = Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
+    let key = Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD);
 
     let line = Line::from(vec![
         Span::styled(link_info, Style::default().fg(Color::Yellow)),
@@ -67,7 +78,10 @@ pub fn render_hint_bar(
         Span::raw("reload "),
         Span::styled("[?]", key),
         Span::raw("help "),
-        Span::styled("[q]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[q]",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
         Span::raw("quit"),
     ]);
 
@@ -78,7 +92,12 @@ pub fn render_hint_bar(
 /// 下部バー（入力モード）
 pub fn render_input_bar(f: &mut Frame, area: Rect, prompt: &str, input: &str) {
     let line = Line::from(vec![
-        Span::styled(prompt, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            prompt,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(input),
         Span::styled("█", Style::default().fg(Color::White)),
     ]);

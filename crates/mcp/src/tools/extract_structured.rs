@@ -2,10 +2,12 @@ use anyhow::Result;
 use serde_json::Value;
 use stillo_core::{ContentExtractor, ExtractorConfig, MarkdownConfig, MarkdownSerializer};
 use stillo_fetcher::{HttpConfig, HttpFetcher};
-use stillo_llm::{CompletionConfig, LlmProvider, prompts};
+use stillo_llm::{prompts, CompletionConfig, LlmProvider};
 
 pub async fn run(args: &Value) -> Result<String> {
-    let url_str = args["url"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'url'"))?;
+    let url_str = args["url"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'url'"))?;
     let url: url::Url = url_str.parse()?;
 
     let fields = match &args["fields"] {
@@ -26,7 +28,10 @@ pub async fn run(args: &Value) -> Result<String> {
     let doc = serializer.serialize(&content);
 
     let llm = LlmProvider::from_env()?;
-    let config = CompletionConfig { temperature: 0.0, ..Default::default() };
+    let config = CompletionConfig {
+        temperature: 0.0,
+        ..Default::default()
+    };
     let messages = prompts::extract_prompt(&fields, &doc);
     let result = llm.complete(messages, &config).await?;
 

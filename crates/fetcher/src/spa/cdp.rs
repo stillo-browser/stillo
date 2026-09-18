@@ -1,5 +1,5 @@
-use url::Url;
 use stillo_core::document::{FetchError, RawHtml};
+use url::Url;
 
 /// Chrome が CDP ポートでリッスンしているか確認する
 pub async fn is_chrome_available(port: u16) -> bool {
@@ -38,9 +38,9 @@ pub async fn fetch_via_cdp(port: u16, url: &Url) -> Result<RawHtml, FetchError> 
         .to_owned();
 
     // 2. WebSocket 接続
-    let (mut ws, _) = connect_async(&ws_url)
-        .await
-        .map_err(|e| FetchError::DelegationFailed(format!("CDP WebSocket connect failed: {}", e)))?;
+    let (mut ws, _) = connect_async(&ws_url).await.map_err(|e| {
+        FetchError::DelegationFailed(format!("CDP WebSocket connect failed: {}", e))
+    })?;
 
     // helper: CDP コマンドを送信
     let send_cmd = |ws: &mut _, id: u64, method: &str, params: Value| {
@@ -78,8 +78,12 @@ pub async fn fetch_via_cdp(port: u16, url: &Url) -> Result<RawHtml, FetchError> 
     let timeout = tokio::time::Duration::from_secs(30);
     let loaded = tokio::time::timeout(timeout, async {
         while let Some(msg) = ws.next().await {
-            let Ok(Message::Text(text)) = msg else { continue };
-            let Ok(v): Result<Value, _> = serde_json::from_str(&text) else { continue };
+            let Ok(Message::Text(text)) = msg else {
+                continue;
+            };
+            let Ok(v): Result<Value, _> = serde_json::from_str(&text) else {
+                continue;
+            };
             if v["method"].as_str() == Some("Page.loadEventFired") {
                 return true;
             }
@@ -111,8 +115,12 @@ pub async fn fetch_via_cdp(port: u16, url: &Url) -> Result<RawHtml, FetchError> 
 
     let html = tokio::time::timeout(tokio::time::Duration::from_secs(10), async {
         while let Some(msg) = ws.next().await {
-            let Ok(Message::Text(text)) = msg else { continue };
-            let Ok(v): Result<Value, _> = serde_json::from_str(&text) else { continue };
+            let Ok(Message::Text(text)) = msg else {
+                continue;
+            };
+            let Ok(v): Result<Value, _> = serde_json::from_str(&text) else {
+                continue;
+            };
             if v["id"].as_u64() == Some(3) {
                 return v["result"]["result"]["value"]
                     .as_str()
@@ -128,7 +136,10 @@ pub async fn fetch_via_cdp(port: u16, url: &Url) -> Result<RawHtml, FetchError> 
 
     // 7. タブを閉じる
     let _ = reqwest::Client::new()
-        .get(format!("http://localhost:{}/json/close/{}", port, target_id))
+        .get(format!(
+            "http://localhost:{}/json/close/{}",
+            port, target_id
+        ))
         .send()
         .await;
 

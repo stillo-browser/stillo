@@ -31,10 +31,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, title: &str, url: &str, scro
             Style::default().add_modifier(Modifier::BOLD),
         ),
         Span::raw(" │ "),
-        Span::styled(
-            truncate(url, url_max),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(truncate(url, url_max), Style::default().fg(Color::DarkGray)),
         Span::styled(pct_label, Style::default().fg(Color::Yellow)),
     ]);
     let bar = Paragraph::new(text).style(Style::default().bg(Color::DarkGray));

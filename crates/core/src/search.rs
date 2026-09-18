@@ -153,7 +153,12 @@ pub fn parse_searxng_results(json_text: &str) -> Option<Vec<SearchResult>> {
                 .trim()
                 .to_string();
             let display_url = url.host_str().unwrap_or("").to_string();
-            Some(SearchResult { title, url, snippet, display_url })
+            Some(SearchResult {
+                title,
+                url,
+                snippet,
+                display_url,
+            })
         })
         .collect();
     Some(out)
@@ -162,7 +167,10 @@ pub fn parse_searxng_results(json_text: &str) -> Option<Vec<SearchResult>> {
 /// Brave Search API（/res/v1/web/search）レスポンスをパースする。
 pub fn parse_brave_results(json_text: &str) -> Option<Vec<SearchResult>> {
     let v: serde_json::Value = serde_json::from_str(json_text).ok()?;
-    let arr = v.pointer("/web/results").and_then(|r| r.as_array())?.clone();
+    let arr = v
+        .pointer("/web/results")
+        .and_then(|r| r.as_array())?
+        .clone();
     let out: Vec<SearchResult> = arr
         .iter()
         .filter_map(|r| {
@@ -178,7 +186,12 @@ pub fn parse_brave_results(json_text: &str) -> Option<Vec<SearchResult>> {
                 .trim()
                 .to_string();
             let display_url = url.host_str().unwrap_or("").to_string();
-            Some(SearchResult { title, url, snippet, display_url })
+            Some(SearchResult {
+                title,
+                url,
+                snippet,
+                display_url,
+            })
         })
         .collect();
     Some(out)
@@ -281,8 +294,16 @@ mod tests {
     #[test]
     fn test_parse_ddg_results_groups_and_resolves() {
         let html = ddg_html(&[
-            ("Example Domain", "https://example.com/", "An illustrative domain"),
-            ("Rust Lang", "https://www.rust-lang.org/", "A language empowering everyone"),
+            (
+                "Example Domain",
+                "https://example.com/",
+                "An illustrative domain",
+            ),
+            (
+                "Rust Lang",
+                "https://www.rust-lang.org/",
+                "A language empowering everyone",
+            ),
         ]);
         let results = parse_ddg_results(&html);
         assert_eq!(results.len(), 2);
@@ -295,7 +316,8 @@ mod tests {
     #[test]
     fn test_parse_ddg_results_empty_on_challenge_page() {
         // anomaly ページには result__a が存在しないため空になる（ブロック検出と併用する）
-        let html = r#"<html><body><div id="challenge-form">anomaly anomaly anomaly</div></body></html>"#;
+        let html =
+            r#"<html><body><div id="challenge-form">anomaly anomaly anomaly</div></body></html>"#;
         assert!(parse_ddg_results(html).is_empty());
     }
 
@@ -310,14 +332,20 @@ mod tests {
     #[test]
     fn test_detect_blocked_various_markers() {
         assert!(detect_blocked_page(200, "<title>Just a moment...</title>"));
-        assert!(detect_blocked_page(200, "<html>Making sure you&#39;re not a bot</html>"));
+        assert!(detect_blocked_page(
+            200,
+            "<html>Making sure you&#39;re not a bot</html>"
+        ));
         assert!(detect_blocked_page(403, "<html>forbidden</html>"));
         assert!(detect_blocked_page(429, "<html>rate limited</html>"));
     }
 
     #[test]
     fn test_detect_not_blocked_normal_page() {
-        assert!(!detect_blocked_page(200, "<html><body><p>normal content</p></body></html>"));
+        assert!(!detect_blocked_page(
+            200,
+            "<html><body><p>normal content</p></body></html>"
+        ));
         // "challenge" という単語だけではブロックと判定しない（誤検出防止）
         assert!(!detect_blocked_page(
             200,
@@ -347,7 +375,10 @@ mod tests {
         assert!(parse_searxng_results("not json").is_none());
         assert!(parse_searxng_results(r#"{"no_results_key": []}"#).is_none());
         // results が空配列 = 正当な「0件」
-        assert_eq!(parse_searxng_results(r#"{"results": []}"#).unwrap().len(), 0);
+        assert_eq!(
+            parse_searxng_results(r#"{"results": []}"#).unwrap().len(),
+            0
+        );
     }
 
     #[test]
@@ -384,7 +415,8 @@ mod tests {
 
     #[test]
     fn test_resolve_ddg_redirect() {
-        let ddg = Url::parse("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2F&rut=x").unwrap();
+        let ddg = Url::parse("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2F&rut=x")
+            .unwrap();
         assert_eq!(resolve_ddg_redirect(ddg).as_str(), "https://example.com/");
 
         let plain = Url::parse("https://example.com/page").unwrap();
