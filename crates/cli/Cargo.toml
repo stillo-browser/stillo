@@ -12,11 +12,11 @@ name = "stillo"
 path = "src/main.rs"
 
 [dependencies]
-stillo-core = { path = "../core", version = "0.1" }
-stillo-fetcher = { path = "../fetcher", version = "0.1" }
-stillo-renderer = { path = "../renderer", version = "0.1" }
-stillo-llm = { path = "../llm", version = "0.1" }
-stillo-mcp = { path = "../mcp", version = "0.1" }
+stillo-core = { path = "../core", version = "0.2" }
+stillo-fetcher = { path = "../fetcher", version = "0.2" }
+stillo-renderer = { path = "../renderer", version = "0.2" }
+stillo-llm = { path = "../llm", version = "0.2" }
+stillo-mcp = { path = "../mcp", version = "0.2" }
 url = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }

@@ -16,7 +16,7 @@ default = []
 tokio = { workspace = true }
 
 [dependencies]
-stillo-core = { path = "../core", version = "0.1" }
+stillo-core = { path = "../core", version = "0.2" }
 url = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

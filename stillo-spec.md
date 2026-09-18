@@ -1,8 +1,8 @@
 # stillo 実装仕様書
 
-**バージョン**: 0.1.8  
+**バージョン**: 0.1.15  
 **言語**: Rust (edition 2021)  
-**策定日**: 2026-05-14（最終更新: 2026-05-15）
+**策定日**: 2026-05-14（最終更新: 2026-08-11）
 
 ---
 
@@ -421,6 +421,7 @@ stillo [OPTIONS] [URL]
 
 SUBCOMMANDS:
   browse      TUIブラウザモード（デフォルト）
+  search      Web検索して結果をTUIで表示
   dump        Markdown/テキストをstdoutに出力
   qa          ページについてLLMに質問
   summarize   ページを要約
@@ -435,7 +436,22 @@ OPTIONS:
   -v, --verbose         詳細ログ出力
 ```
 
-### 7.2 使用例
+### 7.2 Web検索
+
+`stillo search <query>` と MCP `search_web`、TUI の `s` キーは共通の検索チェーン（`fetcher::search::web_search`）を使う。
+
+**バックエンド優先順位**（`SearchBackend::from_env`）:
+
+1. `STILLO_SEARCH_BACKEND=ddg|searxng|brave` — 単独指定時はその1つだけ
+2. `SEARXNG_URL` が設定されていれば SearXNG（JSON API）
+3. `BRAVE_API_KEY` が設定されていれば Brave Search API
+4. DuckDuckGo HTML（`html.duckduckgo.com/html/`）— 常に末尾フォールバック
+
+**ブロック検出**: `core::search::detect_blocked_page` がHTTPステータス（202/403/429）とHTMLマーカー（DDG anomaly / Cloudflare / Anubis）からボットブロックを検出する。ブロック時は空結果ではなくエラーを返し、次バックエンドへフォールバック。全滅時は各バックエンドの失敗理由をまとめた `SearchError::AllBlocked` を返す。
+
+**責務分離**: パース（DDG/SearXNG/Brave HTML・JSON → `SearchResult`）は `core::search` の純粋関数、HTTP・バックエンド選択は `fetcher::search` が担う。
+
+### 7.3 使用例
 
 ```bash
 # TUIブラウズ
@@ -539,13 +555,18 @@ pub enum DelegateTarget {
 |------|------|
 | `j` / `↓` | 下スクロール |
 | `k` / `↑` | 上スクロール |
+| マウスホイール | スクロール（3行/イベント） |
 | `Enter` | リンクをフォロー |
-| `B` / `Alt+←` | 戻る |
 | `Tab` | 次のリンクへ |
-| `U` | URLを直接入力 |
+| `B` / `←` | 戻る（スクロール位置復元） |
+| `F` / `→` | 進む |
+| `r` | リロード（履歴に積まず再取得） |
+| `U` | URLを直接入力（現在URLプリフィル） |
+| `s` | Web検索（検索チェーン経由） |
 | `/` | ページ内検索 |
-| `n` | 次の検索結果 |
+| `n` / `N` | 次の/前の検索結果 |
 | `d` | Markdown dump（stdout出力後終了） |
+| `?` | ヘルプ |
 | `q` / `Ctrl+C` | 終了 |
 
 ---
@@ -669,10 +690,28 @@ pub fn extract_prompt(fields: &str, doc: &MarkdownDocument) -> Vec<Message> { ..
         },
         "required": ["url", "fields"]
       }
+    },
+    {
+      "name": "search_web",
+      "description": "Search the web via DuckDuckGo and return results with title, URL, and snippet. Use format='links' for structured JSON suitable for follow-up fetch_url calls.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Search query" },
+          "format": {
+            "type": "string",
+            "enum": ["markdown", "links"],
+            "default": "markdown"
+          }
+        },
+        "required": ["query"]
+      }
     }
   ]
 }
 ```
+
+検索バックエンドの選択・ブロック検出・フォールバックは §7.2 に従う。ボットブロック時は `isError: true` のエラー応答を返す（空配列ではない）。
 
 ### 10.2 サーバー実装
 
@@ -867,4 +906,10 @@ stillo/
 
 ### Phase 5: MCPサーバー（完了）
 - `mcp`: stdio transport（JSON-RPC 2.0）
-- ツール: `fetch_url` / `read_links` / `extract_structured`
+- ツール: `fetch_url` / `read_links` / `extract_structured` / `search_web`
+
+### Phase 6: 検索チェーン・品質基盤（完了、2026-08-11）
+- `core/search`: DDG/SearXNG/Brave パーサー + ボットブロック検出（純粋関数）
+- `fetcher/search`: バックエンドフォールバックチェーン（SEARXNG_URL / BRAVE_API_KEY / STILLO_SEARCH_BACKEND）
+- 単体テスト22件（readability回帰・JSON-LD・検索パース・ブロック検出）
+- CI: push/PR で `cargo test` + `clippy -D warnings`（ci.yml）

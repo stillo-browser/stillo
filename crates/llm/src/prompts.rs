@@ -1,7 +1,7 @@
 use stillo_core::document::MarkdownDocument;
 use crate::client::Message;
 
-const MAX_CONTENT_CHARS: usize = 6000;
+const MAX_CONTENT_CHARS: usize = 20_000;
 
 pub fn summarize_prompt(doc: &MarkdownDocument) -> Vec<Message> {
     vec![

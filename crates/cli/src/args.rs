@@ -56,6 +56,11 @@ pub enum Command {
         #[arg(long)]
         format: Option<OutputFormat>,
     },
+    /// DuckDuckGoでWeb検索してTUIブラウザで結果を表示
+    Search {
+        /// 検索クエリ
+        query: Vec<String>,
+    },
     /// MCPサーバーとして起動（stdio transport、JSON-RPC 2.0）
     Mcp,
 }

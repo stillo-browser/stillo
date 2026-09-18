@@ -2,6 +2,8 @@ use crate::document::{ExtractedContent, ExtractedLink, PageMetadata};
 use markup5ever_rcdom::{Handle, NodeData};
 use std::collections::HashMap;
 use std::rc::Rc;
+use chrono::{DateTime, Utc};
+use crate::document::{ExtractedContent, ExtractedLink, PageMetadata};
 use url::Url;
 
 const NOISE_TAGS: &[&str] = &[
@@ -24,9 +26,8 @@ impl ReadabilityExtractor {
         let metadata = extract_metadata(root, base_url);
         let body = find_body(root);
 
-        let main_node = body
-            .as_ref()
-            .and_then(|b| find_main_content(b))
+        let main_node = body.as_ref()
+            .and_then(find_main_content)
             .or(body.clone());
 
         let (mh, mt, ml) = main_node
@@ -305,7 +306,7 @@ fn is_noise(handle: &Handle) -> bool {
 fn class_contains_pattern(class_val: &str, pattern: &str) -> bool {
     class_val.split_whitespace().any(|token| {
         // Tailwind のレスポンシブプレフィックス (sm:, md:, lg: など) を除去
-        let bare = token.split(':').last().unwrap_or(token);
+        let bare = token.split(':').next_back().unwrap_or(token);
         // ハイフン区切りのコンポーネントが完全一致するか確認
         bare.split('-').any(|part| part == pattern)
     })
@@ -387,7 +388,7 @@ fn serialize_node(
             let attrs_ref = attrs.borrow();
 
             match tag {
-                "script" | "style" | "noscript" | "iframe" => return,
+                "script" | "style" | "noscript" | "iframe" => (),
                 "a" if preserve_links => {
                     let href = attrs_ref
                         .iter()
@@ -423,9 +424,10 @@ fn serialize_node(
                     html.push_str("</a>");
 
                     if let Some(href_url) = resolved {
+                        let href_url = resolve_ddg_redirect(href_url);
                         let trimmed = link_text.trim().to_owned();
-                        // 画像リンク等でアンカーテキストが空のものは除外
-                        if !trimmed.is_empty() {
+                        // 画像リンク等でアンカーテキストが空、または同一URLの重複は除外
+                        if !trimmed.is_empty() && !links.iter().any(|l| l.href == href_url) {
                             links.push(ExtractedLink {
                                 text: trimmed,
                                 href: href_url,
@@ -433,7 +435,6 @@ fn serialize_node(
                             });
                         }
                     }
-                    return;
                 }
                 _ => {
                     // ブロック要素
@@ -483,7 +484,6 @@ fn serialize_node(
                             serialize_node(child, html, text, links, base_url, preserve_links);
                         }
                     }
-                    return;
                 }
             }
         }
@@ -539,8 +539,11 @@ fn extract_metadata(root: &Handle, base_url: &Url) -> PageMetadata {
         og_image: None,
         canonical: None,
         published_at: None,
+        author: None,
+        date_modified: None,
     };
     collect_meta(root, &mut meta, base_url);
+    apply_json_ld(root, &mut meta);
     meta
 }
 
@@ -565,10 +568,11 @@ fn collect_meta(handle: &Handle, meta: &mut PageMetadata, base_url: &Url) {
 
             match (name_attr.as_deref(), property_attr.as_deref(), content) {
                 (Some("description"), _, Some(c)) => meta.description = Some(c),
+                (_, Some("og:description"), Some(c)) => { meta.description.get_or_insert(c); }
                 (_, Some("og:title"), Some(c)) => meta.og_title = Some(c),
                 (_, Some("og:image"), Some(c)) => meta.og_image = Some(c),
                 _ => {}
-            }
+            };
         } else if tag == "link" {
             let is_canonical = attrs_ref
                 .iter()
@@ -587,5 +591,326 @@ fn collect_meta(handle: &Handle, meta: &mut PageMetadata, base_url: &Url) {
 
     for child in handle.children.borrow().iter() {
         collect_meta(child, meta, base_url);
+    }
+}
+
+/// `<script type="application/ld+json">` から構造化メタデータを抽出して meta に補完する。
+/// OGP/meta タグで既に設定されているフィールドは上書きしない。
+fn apply_json_ld(root: &Handle, meta: &mut PageMetadata) {
+    let mut scripts: Vec<String> = Vec::new();
+    collect_json_ld_scripts(root, &mut scripts);
+
+    for script in scripts {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&script) {
+            let objects: &[serde_json::Value] = if value.is_array() {
+                value.as_array().map(|a| a.as_slice()).unwrap_or(&[])
+            } else {
+                std::slice::from_ref(&value)
+            };
+            for obj in objects {
+                merge_json_ld_object(obj, meta);
+            }
+        }
+    }
+}
+
+fn collect_json_ld_scripts(handle: &Handle, out: &mut Vec<String>) {
+    if let NodeData::Element { name, attrs, .. } = &handle.data {
+        if name.local.as_ref() == "script" {
+            let is_json_ld = attrs.borrow().iter().any(|a| {
+                a.name.local.as_ref() == "type" && a.value.as_ref() == "application/ld+json"
+            });
+            if is_json_ld {
+                let mut text = String::new();
+                collect_text(handle, &mut text);
+                if !text.trim().is_empty() {
+                    out.push(text);
+                }
+                return;
+            }
+        }
+    }
+    for child in handle.children.borrow().iter() {
+        collect_json_ld_scripts(child, out);
+    }
+}
+
+fn merge_json_ld_object(obj: &serde_json::Value, meta: &mut PageMetadata) {
+    if meta.author.is_none() {
+        meta.author = extract_json_ld_author(obj);
+    }
+    if meta.published_at.is_none() {
+        meta.published_at = obj["datePublished"].as_str().and_then(parse_iso_date);
+    }
+    if meta.date_modified.is_none() {
+        meta.date_modified = obj["dateModified"].as_str().and_then(parse_iso_date);
+    }
+    if meta.description.is_none() {
+        if let Some(desc) = obj["description"].as_str() {
+            meta.description = Some(desc.to_owned());
+        }
+    }
+}
+
+fn extract_json_ld_author(obj: &serde_json::Value) -> Option<String> {
+    let author = &obj["author"];
+    // "author": "Name"
+    if let Some(s) = author.as_str() {
+        return Some(s.to_owned());
+    }
+    // "author": {"name": "Name"}
+    if let Some(s) = author["name"].as_str() {
+        return Some(s.to_owned());
+    }
+    // "author": [{"name": "Name"}, ...]
+    if let Some(arr) = author.as_array() {
+        return arr.first().and_then(|a| a["name"].as_str()).map(|s| s.to_owned());
+    }
+    None
+}
+
+/// ISO 8601 日付文字列を DateTime<Utc> に変換する。
+/// "2026-05-19" と "2026-05-19T10:00:00Z" の両形式に対応する。
+fn parse_iso_date(s: &str) -> Option<DateTime<Utc>> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    // 日付のみ (YYYY-MM-DD) は UTC 00:00 として扱う
+    if let Ok(nd) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return nd.and_hms_opt(0, 0, 0).map(|ndt| ndt.and_utc());
+    }
+    None
+}
+
+/// `duckduckgo.com/l/?uddg=<encoded_url>` のリダイレクト URL を実際の URL に解決する。
+/// DDG 以外の URL はそのまま返す。
+fn resolve_ddg_redirect(url: Url) -> Url {
+    if url.host_str() != Some("duckduckgo.com") || url.path() != "/l/" {
+        return url;
+    }
+    url.query_pairs()
+        .find(|(k, _)| k == "uddg")
+        .and_then(|(_, v)| v.parse::<Url>().ok())
+        .unwrap_or(url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use html5ever::parse_document;
+    use html5ever::tendril::TendrilSink;
+    use markup5ever_rcdom::RcDom;
+
+    fn parse_html(html: &str) -> RcDom {
+        parse_document(RcDom::default(), Default::default())
+            .from_utf8()
+            .read_from(&mut html.as_bytes())
+            .unwrap()
+    }
+
+    #[test]
+    fn test_json_ld_article() {
+        let html = r#"<!DOCTYPE html><html><head>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "テスト記事",
+  "author": {"@type": "Person", "name": "山田太郎"},
+  "datePublished": "2026-05-19T10:00:00Z",
+  "dateModified": "2026-05-20T08:00:00Z",
+  "description": "これはテスト記事の説明です"
+}
+</script>
+</head><body><p>本文テキスト</p></body></html>"#;
+
+        let dom = parse_html(html);
+        let base_url = Url::parse("https://example.com/article").unwrap();
+        let extractor = ReadabilityExtractor { preserve_links: true };
+        let content = extractor.extract(&dom.document, &base_url);
+
+        assert_eq!(content.metadata.author.as_deref(), Some("山田太郎"));
+        assert!(content.metadata.published_at.is_some());
+        assert!(content.metadata.date_modified.is_some());
+        assert_eq!(content.metadata.description.as_deref(), Some("これはテスト記事の説明です"));
+
+        let published = content.metadata.published_at.unwrap();
+        assert_eq!(published.format("%Y-%m-%d").to_string(), "2026-05-19");
+
+        let modified = content.metadata.date_modified.unwrap();
+        assert_eq!(modified.format("%Y-%m-%d").to_string(), "2026-05-20");
+    }
+
+    #[test]
+    fn test_json_ld_author_string() {
+        let html = r#"<!DOCTYPE html><html><head>
+<script type="application/ld+json">
+{"@type": "Article", "author": "鈴木花子", "datePublished": "2026-01-01"}
+</script>
+</head><body><p>本文</p></body></html>"#;
+
+        let dom = parse_html(html);
+        let base_url = Url::parse("https://example.com/").unwrap();
+        let extractor = ReadabilityExtractor { preserve_links: false };
+        let content = extractor.extract(&dom.document, &base_url);
+
+        assert_eq!(content.metadata.author.as_deref(), Some("鈴木花子"));
+        assert_eq!(
+            content.metadata.published_at.unwrap().format("%Y-%m-%d").to_string(),
+            "2026-01-01"
+        );
+    }
+
+    #[test]
+    fn test_json_ld_author_array() {
+        let html = r#"<!DOCTYPE html><html><head>
+<script type="application/ld+json">
+{"@type": "Article", "author": [{"name": "著者A"}, {"name": "著者B"}]}
+</script>
+</head><body><p>本文</p></body></html>"#;
+
+        let dom = parse_html(html);
+        let base_url = Url::parse("https://example.com/").unwrap();
+        let extractor = ReadabilityExtractor { preserve_links: false };
+        let content = extractor.extract(&dom.document, &base_url);
+
+        // 配列の場合は最初の著者を採用
+        assert_eq!(content.metadata.author.as_deref(), Some("著者A"));
+    }
+
+    #[test]
+    #[ignore = "requires /tmp/rust_wiki.html (run: curl -s https://en.wikipedia.org/wiki/Rust_\\(programming_language\\) > /tmp/rust_wiki.html)"]
+    fn test_json_ld_wikipedia_real_html() {
+        let html = std::fs::read_to_string("/tmp/rust_wiki.html").expect("need /tmp/rust_wiki.html");
+        let dom = parse_html(&html);
+        let base_url = Url::parse("https://en.wikipedia.org/wiki/Rust_(programming_language)").unwrap();
+        let extractor = ReadabilityExtractor { preserve_links: false };
+        let content = extractor.extract(&dom.document, &base_url);
+
+        let meta = &content.metadata;
+        println!("author       = {:?}", meta.author);
+        println!("published_at = {:?}", meta.published_at);
+        println!("date_modified= {:?}", meta.date_modified);
+        println!("description  = {:?}", meta.description);
+        println!("og_title     = {:?}", meta.og_title);
+
+        assert!(meta.author.is_some(), "author が取れていない");
+        assert!(meta.published_at.is_some(), "datePublished が取れていない");
+        assert!(meta.date_modified.is_some(), "dateModified が取れていない");
+    }
+
+    #[test]
+    fn test_json_ld_does_not_override_ogp() {
+        // OGP の description が先に設定された場合、JSON-LD で上書きしない
+        let html = r#"<!DOCTYPE html><html><head>
+<meta property="og:description" content="OGPの説明">
+<script type="application/ld+json">
+{"@type": "Article", "description": "JSON-LDの説明"}
+</script>
+</head><body><p>本文</p></body></html>"#;
+
+        let dom = parse_html(html);
+        let base_url = Url::parse("https://example.com/").unwrap();
+        let extractor = ReadabilityExtractor { preserve_links: false };
+        let content = extractor.extract(&dom.document, &base_url);
+
+        assert_eq!(content.metadata.description.as_deref(), Some("OGPの説明"));
+    }
+
+    // -----------------------------------------------------------------------
+    // is_noise / class_contains_pattern 回帰テスト
+    // -----------------------------------------------------------------------
+
+    /// class_contains_pattern の直接テスト。
+    /// コンポーネント単位の完全一致で、部分文字列一致しないことを確認する。
+    #[test]
+    fn test_class_contains_pattern_component_matching() {
+        // 回帰: Tailwind "shadow-2xs" が "ad" にヒットしてはならない（dev.classmethod.jp 障害）
+        assert!(!class_contains_pattern("shadow-2xs", "ad"));
+        assert!(!class_contains_pattern("header-image-container", "ad"));
+
+        // コンポーネント完全一致はヒットする
+        assert!(class_contains_pattern("ad", "ad"));
+        assert!(class_contains_pattern("ad-banner sidebar", "ad"));
+        assert!(class_contains_pattern("p-sidebar-nav", "nav"));
+
+        // Tailwind レスポンシブプレフィックスは除去して判定
+        assert!(class_contains_pattern("md:ad-banner", "ad"));
+        assert!(!class_contains_pattern("md:shadow-2xs", "ad"));
+
+        // 空文字列・無関係トークン
+        assert!(!class_contains_pattern("", "ad"));
+        assert!(!class_contains_pattern("card badge loading", "ad"));
+    }
+
+    /// is_noise のタグ/クラス判定。shadow-2xs クラスのdivがノイズ扱いされないこと。
+    #[test]
+    fn test_is_noise_regression_shadow_2xs() {
+        // 回帰: shadow-2xs が "ad" に誤ヒットして記事ラッパー全体が
+        // スキップされ、本文が13行しか取れなかった障害の再現防止
+        let html = r#"<html><body><div class="shadow-2xs bg-white rounded"><p>本文テキスト</p></div></body></html>"#;
+        let dom = parse_html(html);
+        let div = find_tag(&dom.document, "div").expect("div exists");
+        assert!(!is_noise(&div), "shadow-2xs はノイズではない");
+    }
+
+    /// ノイズタグ（nav/aside等）とノイスクラスの検出を確認する。
+    #[test]
+    fn test_is_noise_tags_and_classes() {
+        let html = r#"<html><body>
+<nav>メニュー</nav>
+<aside class="sidebar">関連</aside>
+<div id="ad-container">広告</div>
+<main><p>本文</p></main>
+</body></html>"#;
+        let dom = parse_html(html);
+
+        let nav = find_tag(&dom.document, "nav").unwrap();
+        assert!(is_noise(&nav), "nav タグはノイズ");
+
+        let aside = find_tag(&dom.document, "aside").unwrap();
+        assert!(is_noise(&aside), "sidebar クラスはノイズ");
+
+        let ad_div = find_tag(&dom.document, "div").unwrap();
+        assert!(is_noise(&ad_div), "id=ad-container はノイズ（ad コンポーネント一致）");
+
+        let main = find_tag(&dom.document, "main").unwrap();
+        assert!(!is_noise(&main), "main はノイズではない");
+    }
+
+    /// id="advertisement" は "ad" にヒットしない（コンポーネント完全一致の設計意図）。
+    /// 部分文字列一致に戻すと shadow-2xs→ad のような誤検出が再発するため、
+    /// この挙動を回帰テストとして固定する。
+    #[test]
+    fn test_advertisement_id_is_not_noise_by_design() {
+        let html = r#"<html><body><div id="advertisement"><p>本文テキスト</p></div></body></html>"#;
+        let dom = parse_html(html);
+        let div = find_tag(&dom.document, "div").unwrap();
+        assert!(
+            !is_noise(&div),
+            "advertisement は ad コンポーネントに完全一致しないためノイズ扱いしない"
+        );
+    }
+
+    /// shadow-2xs ラッパー内の本文が抽出されること（エンドツーエンド回帰）。
+    #[test]
+    fn test_extract_content_inside_shadow_wrapper() {
+        let article = "これは記事の本文です。十分な長さを持たせて抽出対象になるようにしています。".repeat(3);
+        let html = format!(
+            r#"<!DOCTYPE html><html><head><title>テスト記事</title></head><body>
+<div class="shadow-2xs"><article><h1>記事タイトル</h1><p>{}</p></article></div>
+</body></html>"#,
+            article
+        );
+        let dom = parse_html(&html);
+        let base_url = Url::parse("https://dev.example.jp/articles/1").unwrap();
+        let extractor = ReadabilityExtractor { preserve_links: true };
+        let content = extractor.extract(&dom.document, &base_url);
+
+        assert!(
+            content.body_text.contains("これは記事の本文です"),
+            "shadow-2xs ラッパー内の本文が抽出されるべき: got {:?}",
+            &content.body_text[..content.body_text.len().min(100)]
+        );
     }
 }

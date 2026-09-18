@@ -36,6 +36,8 @@ pub struct PageMetadata {
     pub og_image: Option<String>,
     pub canonical: Option<Url>,
     pub published_at: Option<DateTime<Utc>>,
+    pub author: Option<String>,
+    pub date_modified: Option<DateTime<Utc>>,
 }
 
 /// フォーマット非依存のブラウズ用ページ表現。

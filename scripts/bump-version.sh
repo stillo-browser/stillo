@@ -34,6 +34,10 @@ fi
 
 # Cargo.toml を書き換え
 sed -i "s/^version = \"$CURRENT\"/version = \"$NEW_VERSION\"/" "$CARGO_TOML"
+# クレート間の依存バージョンも更新（例: version = "0.1" → "0.2"）
+OLD_MINOR=$(echo "$CURRENT" | sed 's/\.[0-9]*$//')
+NEW_MINOR=$(echo "$NEW_VERSION" | sed 's/\.[0-9]*$//')
+find "$ROOT/crates" -name Cargo.toml -exec sed -i "s/version = \"$OLD_MINOR\"/version = \"$NEW_MINOR\"/g" {} \;
 
 # ビルドして Cargo.lock を更新
 echo "Building..."

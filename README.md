@@ -47,6 +47,7 @@ stillo dump -v https://example.com
 |----------|------|
 | `dump`      | ページをMarkdown/テキスト/JSONとして stdout に出力 |
 | `browse`    | TUIブラウザとして起動 |
+| `search`    | Web検索して結果をTUIで表示（`stillo search <query>`） |
 | `qa`        | ページについてLLMに質問（LLM APIキーが必要） |
 | `summarize` | ページをLLMで要約（LLM APIキーが必要） |
 | `extract`   | 指定フィールドをLLMで抽出（LLM APIキーが必要） |
@@ -123,9 +124,22 @@ stillo qa "記事の要点は？" https://example.com/article
 
 | ツール | 説明 |
 |--------|------|
-| `fetch_url` | URLを取得しMarkdown/テキスト/JSONで返す。SPA自動委譲対応 |
+| `fetch_url` | URLを取得してMarkdown/テキスト/JSONで返す。SPA自動委譲対応 |
 | `read_links` | URLからリンク一覧（テキスト・href）を抽出して返す |
+| `search_web` | Web検索して結果を返す（format=markdown\|links）。ボットブロック時はエラーを明示 |
 | `extract_structured` | LLMを使って指定フィールドをJSONで抽出する（LLM APIキーが必要） |
+
+### Web検索バックエンド
+
+`search_web` と `stillo search` はバックエンドチェーンで検索します。ボットブロック（DDGの202チャレンジ等）を検出した場合は空結果ではなくエラーを返し、次のバックエンドへフォールバックします。
+
+| 環境変数 | 効果 |
+|----------|------|
+| `SEARXNG_URL` | SearXNG インスタンスを最優先バックエンドに追加（JSON API: `/search?format=json`） |
+| `BRAVE_API_KEY` | Brave Search API（無料枠2000回/月）をバックエンドに追加 |
+| `STILLO_SEARCH_BACKEND` | `ddg`\|`searxng`\|`brave` で単独バックエンド指定 |
+
+DuckDuckGo HTML エンドポイントは常に末尾のフォールバックとして有効（ただし高頻度利用時はボットブロックされることがある）。
 
 ### Claude Codeでの設定例
 

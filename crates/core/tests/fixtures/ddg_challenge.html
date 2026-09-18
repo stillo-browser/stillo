@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>DuckDuckGo</title>
+</head>
+<body>
+<div id="anomaly-modal">
+  <p>anomaly detected — please verify you are human</p>
+</div>
+<div id="challenge-form">
+  <form action="/challenge" method="post">
+    <input type="hidden" name="anomaly" value="true"/>
+    <button type="submit">challenge</button>
+  </form>
+</div>
+<div id="lite_wrapper"></div>
+</body>
+</html>

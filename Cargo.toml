@@ -3,7 +3,7 @@ members = ["crates/core", "crates/fetcher", "crates/renderer", "crates/llm", "cr
 resolver = "2"
 
 [workspace.package]
-version = "0.1.15"
+version = "0.2.0"
 edition = "2021"
 authors = ["stillo contributors"]
 license = "MIT OR Apache-2.0"

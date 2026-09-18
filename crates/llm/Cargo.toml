@@ -8,7 +8,7 @@ readme = "../../README.md"
 description = "LLM bridge for stillo terminal browser"
 
 [dependencies]
-stillo-core = { path = "../core", version = "0.1" }
+stillo-core = { path = "../core", version = "0.2" }
 url = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }

@@ -69,8 +69,8 @@ fn parse_jina_response(body: &str) -> (String, String) {
     let mut title = String::new();
     let mut content_start = 0;
     for (i, line) in body.lines().enumerate() {
-        if line.starts_with("Title: ") {
-            title = line["Title: ".len()..].trim().to_owned();
+        if let Some(rest) = line.strip_prefix("Title: ") {
+            title = rest.trim().to_owned();
         } else if line.starts_with("Markdown Content:") {
             // "Markdown Content:" 以降が本文
             let byte_offset: usize = body
@@ -110,12 +110,12 @@ fn markdown_to_html_minimal(md: &str) -> String {
             continue;
         }
 
-        if line.starts_with("# ") {
-            html.push_str(&format!("<h1>{}</h1>\n", html_escape(&line[2..])));
-        } else if line.starts_with("## ") {
-            html.push_str(&format!("<h2>{}</h2>\n", html_escape(&line[3..])));
-        } else if line.starts_with("### ") {
-            html.push_str(&format!("<h3>{}</h3>\n", html_escape(&line[4..])));
+        if let Some(rest) = line.strip_prefix("# ") {
+            html.push_str(&format!("<h1>{}</h1>\n", html_escape(rest)));
+        } else if let Some(rest) = line.strip_prefix("## ") {
+            html.push_str(&format!("<h2>{}</h2>\n", html_escape(rest)));
+        } else if let Some(rest) = line.strip_prefix("### ") {
+            html.push_str(&format!("<h3>{}</h3>\n", html_escape(rest)));
         } else if line.trim().is_empty() {
             html.push_str("<br>\n");
         } else {

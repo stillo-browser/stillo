@@ -64,20 +64,30 @@ impl HttpFetcher {
     }
 
     pub async fn fetch(&self, url: &Url) -> Result<RawHtml, FetchError> {
-        let response = self
-            .client
-            .get(url.as_str())
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    FetchError::Timeout { seconds: 30 }
-                } else if e.is_connect() || e.is_request() {
-                    FetchError::Tls(e.to_string())
-                } else {
-                    FetchError::Tls(e.to_string())
-                }
-            })?;
+        self.fetch_inner(url, &[]).await
+    }
+
+    /// 追加ヘッダーを付けて GET する（検索API等の認証ヘッダー用）。
+    pub async fn fetch_with_headers(
+        &self,
+        url: &Url,
+        headers: &[(&str, &str)],
+    ) -> Result<RawHtml, FetchError> {
+        self.fetch_inner(url, headers).await
+    }
+
+    async fn fetch_inner(&self, url: &Url, extra_headers: &[(&str, &str)]) -> Result<RawHtml, FetchError> {
+        let mut request = self.client.get(url.as_str());
+        for (name, value) in extra_headers {
+            request = request.header(*name, *value);
+        }
+        let response = request.send().await.map_err(|e| {
+            if e.is_timeout() {
+                FetchError::Timeout { seconds: 30 }
+            } else {
+                FetchError::Tls(e.to_string())
+            }
+        })?;
 
         let status = response.status().as_u16();
         if status >= 400 {

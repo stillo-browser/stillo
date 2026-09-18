@@ -130,6 +130,23 @@ impl McpServer {
                         },
                         "required": ["url", "fields"]
                     }
+                },
+                {
+                    "name": "search_web",
+                    "description": "Search the web via DuckDuckGo and return results with title, URL, and snippet. Use format='links' for structured JSON suitable for follow-up fetch_url calls.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "query": { "type": "string", "description": "Search query" },
+                            "format": {
+                                "type": "string",
+                                "enum": ["markdown", "links"],
+                                "default": "markdown",
+                                "description": "'markdown' returns a readable list; 'links' returns a JSON array of {title, url, snippet, display_url}"
+                            }
+                        },
+                        "required": ["query"]
+                    }
                 }
             ]
         }))
@@ -146,6 +163,7 @@ impl McpServer {
             "fetch_url" => tools::fetch_url::run(args).await,
             "read_links" => tools::read_links::run(args).await,
             "extract_structured" => tools::extract_structured::run(args).await,
+            "search_web" => tools::search::run(args).await,
             _ => Err(anyhow::anyhow!("unknown tool: {}", name)),
         };
 
