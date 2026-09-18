@@ -1,16 +1,16 @@
 mod args;
 
 use anyhow::{Context, Result};
-use clap::Parser;
 use args::{Cli, Command, DelegateTarget, OutputFormat};
+use clap::Parser;
 use stillo_core::{
     document::{DelegationTarget, SpaDetection},
     ContentExtractor, ExtractorConfig, MarkdownConfig, MarkdownSerializer,
 };
 use stillo_fetcher::{HttpConfig, HttpFetcher, SpaDelegationChain};
-use stillo_renderer::{TuiBrowser, TuiResult};
-use stillo_llm::{LlmProvider, CompletionConfig, prompts};
+use stillo_llm::{prompts, CompletionConfig, LlmProvider};
 use stillo_mcp::McpServer;
+use stillo_renderer::{TuiBrowser, TuiResult};
 use url::Url;
 
 #[tokio::main]
@@ -27,7 +27,12 @@ async fn main() -> Result<()> {
         .init();
 
     match cli.command {
-        Some(Command::Dump { url, format, delegate, no_delegate }) => {
+        Some(Command::Dump {
+            url,
+            format,
+            delegate,
+            no_delegate,
+        }) => {
             let fmt = format.unwrap_or(cli.format);
             let del = delegate.or(cli.delegate);
             let no_del = no_delegate || cli.no_delegate;
@@ -48,7 +53,11 @@ async fn main() -> Result<()> {
             let no_del = cli.no_delegate;
             summarize(&url, cli.timeout, del.as_ref(), no_del).await?;
         }
-        Some(Command::Extract { fields, url, format }) => {
+        Some(Command::Extract {
+            fields,
+            url,
+            format,
+        }) => {
             let fmt = format.unwrap_or(cli.format);
             let del = cli.delegate.clone();
             let no_del = cli.no_delegate;
@@ -133,16 +142,22 @@ async fn run_web_search(query: &str) -> Result<stillo_core::BrowsePage> {
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let md = stillo_fetcher::results_to_markdown(query, &results);
-    let url = Url::parse(&format!("stillo://search?q={}", url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>()))?;
+    let url = Url::parse(&format!(
+        "stillo://search?q={}",
+        url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>()
+    ))?;
     Ok(stillo_core::parse_markdown_to_ast(&md, &url))
 }
 
 /// RawHtml を Content-Type とボディの内容に応じてフォーマット判定し BrowsePage に変換する。
 /// フォーマット判定をフェッチ後に行うことで、レスポンスの実態に基づいた処理ができる。
-fn raw_to_browse_page(raw: stillo_core::document::RawHtml) -> Result<stillo_core::BrowsePage, stillo_core::ExtractionError> {
+fn raw_to_browse_page(
+    raw: stillo_core::document::RawHtml,
+) -> Result<stillo_core::BrowsePage, stillo_core::ExtractionError> {
     let ct = raw.content_type.to_lowercase();
 
-    let is_feed = ct.contains("rss") || ct.contains("atom")
+    let is_feed = ct.contains("rss")
+        || ct.contains("atom")
         || (ct.contains("xml") && looks_like_feed(&raw.bytes));
     let is_markdown = ct.contains("markdown") || ct.contains("text/plain");
 
@@ -196,7 +211,10 @@ async fn fetch_raw(
     let extractor = ContentExtractor::new(ExtractorConfig::default());
 
     tracing::debug!("fetching {}", url);
-    let raw = fetcher.fetch(url).await.with_context(|| format!("failed to fetch {}", url))?;
+    let raw = fetcher
+        .fetch(url)
+        .await
+        .with_context(|| format!("failed to fetch {}", url))?;
     tracing::debug!("fetched {} bytes (status={})", raw.bytes.len(), raw.status);
 
     // frameset ページの場合、コンテンツが最も多いフレームを取得する
@@ -205,8 +223,13 @@ async fn fetch_raw(
         if frames.is_empty() {
             raw
         } else {
-            tracing::debug!("frameset detected ({} frames), fetching frame contents", frames.len());
-            fetch_richest_frame(&fetcher, &extractor, frames).await.unwrap_or(raw)
+            tracing::debug!(
+                "frameset detected ({} frames), fetching frame contents",
+                frames.len()
+            );
+            fetch_richest_frame(&fetcher, &extractor, frames)
+                .await
+                .unwrap_or(raw)
         }
     };
 
@@ -221,7 +244,10 @@ async fn fetch_raw(
     match &detection {
         SpaDetection::Static => Ok(raw),
         SpaDetection::SuspectedSpa { text_length } => {
-            tracing::warn!("SPA suspected (text_length={}), trying delegation", text_length);
+            tracing::warn!(
+                "SPA suspected (text_length={}), trying delegation",
+                text_length
+            );
             delegate_or_fallback(url, raw, delegate, timeout).await
         }
         SpaDetection::FrameworkDetected { framework } => {
@@ -241,20 +267,20 @@ async fn fetch_richest_frame(
     let mut best: Option<(stillo_core::document::RawHtml, i64)> = None;
 
     for url in frames {
-        let Ok(raw) = fetcher.fetch(&url).await else { continue };
+        let Ok(raw) = fetcher.fetch(&url).await else {
+            continue;
+        };
         // ネストしたフレームセットはスキップ
         if !extractor.detect_frames(&raw).is_empty() {
             continue;
         }
         let url_str = raw.url.as_str().to_lowercase();
-        let nav_penalty: i64 = if url_str.contains("menu")
-            || url_str.contains("nav")
-            || url_str.contains("sidebar")
-        {
-            -100_000
-        } else {
-            0
-        };
+        let nav_penalty: i64 =
+            if url_str.contains("menu") || url_str.contains("nav") || url_str.contains("sidebar") {
+                -100_000
+            } else {
+                0
+            };
         let score = raw.bytes.len() as i64 + nav_penalty;
         if best.as_ref().is_none_or(|(_, s)| score > *s) {
             best = Some((raw, score));
@@ -328,8 +354,11 @@ async fn dump(
 fn inline_to_plain(inline: &stillo_core::Inline) -> String {
     use stillo_core::Inline;
     match inline {
-        Inline::Text(s) | Inline::Bold(s) | Inline::Italic(s)
-        | Inline::BoldItalic(s) | Inline::Code(s) => s.clone(),
+        Inline::Text(s)
+        | Inline::Bold(s)
+        | Inline::Italic(s)
+        | Inline::BoldItalic(s)
+        | Inline::Code(s) => s.clone(),
         Inline::Link { text, .. } => text.clone(),
         Inline::SoftBreak => "\n".to_owned(),
     }
@@ -345,7 +374,9 @@ async fn qa(
     let doc = fetch_as_markdown(url, timeout, delegate, no_delegate).await?;
     let llm = LlmProvider::from_env().context("LLM provider not configured")?;
     let messages = prompts::qa_prompt(question, &doc);
-    let answer = llm.complete(messages, &CompletionConfig::default()).await
+    let answer = llm
+        .complete(messages, &CompletionConfig::default())
+        .await
         .context("LLM request failed")?;
     println!("{}", answer);
     Ok(())
@@ -360,7 +391,9 @@ async fn summarize(
     let doc = fetch_as_markdown(url, timeout, delegate, no_delegate).await?;
     let llm = LlmProvider::from_env().context("LLM provider not configured")?;
     let messages = prompts::summarize_prompt(&doc);
-    let summary = llm.complete(messages, &CompletionConfig::default()).await
+    let summary = llm
+        .complete(messages, &CompletionConfig::default())
+        .await
         .context("LLM request failed")?;
     println!("{}", summary);
     Ok(())
@@ -376,9 +409,14 @@ async fn extract_fields(
 ) -> Result<()> {
     let doc = fetch_as_markdown(url, timeout, delegate, no_delegate).await?;
     let llm = LlmProvider::from_env().context("LLM provider not configured")?;
-    let config = CompletionConfig { temperature: 0.0, ..Default::default() };
+    let config = CompletionConfig {
+        temperature: 0.0,
+        ..Default::default()
+    };
     let messages = prompts::extract_prompt(fields, &doc);
-    let result = llm.complete(messages, &config).await
+    let result = llm
+        .complete(messages, &config)
+        .await
         .context("LLM request failed")?;
 
     // JSON 出力形式の場合は JSON として再フォーマットする
@@ -401,7 +439,9 @@ async fn fetch_as_markdown(
 ) -> Result<stillo_core::document::MarkdownDocument> {
     let extractor = ContentExtractor::new(ExtractorConfig::default());
     let raw = fetch_raw(url, timeout, delegate, no_delegate).await?;
-    let content = extractor.extract(&raw).context("failed to extract content")?;
+    let content = extractor
+        .extract(&raw)
+        .context("failed to extract content")?;
     let serializer = MarkdownSerializer::new(MarkdownConfig::default());
     Ok(serializer.serialize(&content))
 }
@@ -430,19 +470,19 @@ async fn delegate_or_fallback(
 fn build_delegation_chain(delegate: Option<&DelegateTarget>) -> SpaDelegationChain {
     match delegate {
         None | Some(DelegateTarget::Auto) => SpaDelegationChain::from_env(9222),
-        Some(DelegateTarget::Cdp) => SpaDelegationChain::with_single_target(
-            DelegationTarget::LocalCdp { port: 9222 },
-        ),
-        Some(DelegateTarget::Playwright) => SpaDelegationChain::with_single_target(
-            DelegationTarget::PlaywrightDaemon {
+        Some(DelegateTarget::Cdp) => {
+            SpaDelegationChain::with_single_target(DelegationTarget::LocalCdp { port: 9222 })
+        }
+        Some(DelegateTarget::Playwright) => {
+            SpaDelegationChain::with_single_target(DelegationTarget::PlaywrightDaemon {
                 socket_path: "/tmp/stillo-playwright.sock".into(),
-            },
-        ),
-        Some(DelegateTarget::Jina) => SpaDelegationChain::with_single_target(
-            DelegationTarget::JinaReader {
+            })
+        }
+        Some(DelegateTarget::Jina) => {
+            SpaDelegationChain::with_single_target(DelegationTarget::JinaReader {
                 api_key: std::env::var("JINA_API_KEY").ok(),
-            },
-        ),
+            })
+        }
         Some(DelegateTarget::Firecrawl) => {
             let base_url = std::env::var("FIRECRAWL_URL")
                 .ok()

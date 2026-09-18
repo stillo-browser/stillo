@@ -1,5 +1,5 @@
-use stillo_core::document::MarkdownDocument;
 use crate::client::Message;
+use stillo_core::document::MarkdownDocument;
 
 const MAX_CONTENT_CHARS: usize = 20_000;
 

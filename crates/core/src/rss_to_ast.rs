@@ -1,8 +1,8 @@
-use url::Url;
 use crate::{
     ast::{Block, Document, Inline},
     document::{BrowsePage, ExtractedLink},
 };
+use url::Url;
 
 /// RSS 2.0 / RSS 1.0 (RDF) / Atom 1.0 XML を BrowsePage に変換する。
 /// 判別不能な XML の場合は None を返す。
@@ -11,7 +11,7 @@ pub fn parse_rss_to_ast(xml: &str, base_url: &Url) -> Option<BrowsePage> {
     let root = xml_doc.root_element();
     match root.tag_name().name() {
         "rss" => parse_rss2(root, base_url),
-        "RDF"  => parse_rss1(root, base_url),
+        "RDF" => parse_rss1(root, base_url),
         "feed" => parse_atom(root, base_url),
         _ => None,
     }
@@ -51,14 +51,20 @@ fn parse_rss2(root: roxmltree::Node, base_url: &Url) -> Option<BrowsePage> {
                     href: href.clone(),
                     rel: None,
                 });
-                vec![Inline::Link { text: title.clone(), href: href.to_string() }]
+                vec![Inline::Link {
+                    text: title.clone(),
+                    href: href.to_string(),
+                }]
             } else {
                 vec![Inline::Text(title.clone())]
             }
         } else {
             vec![Inline::Text(title.clone())]
         };
-        blocks.push(Block::Heading { level: 2, inlines: title_inlines });
+        blocks.push(Block::Heading {
+            level: 2,
+            inlines: title_inlines,
+        });
 
         // 日付・著者メタ情報を段落として追加する
         let meta = if !pub_date.is_empty() && !author.is_empty() {
@@ -140,15 +146,25 @@ fn parse_rss1(root: roxmltree::Node, base_url: &Url) -> Option<BrowsePage> {
 
         let title_inlines = if let Some(ref href_str) = link_str {
             if let Ok(href) = base_url.join(href_str) {
-                links.push(ExtractedLink { text: title.clone(), href: href.clone(), rel: None });
-                vec![Inline::Link { text: title.clone(), href: href.to_string() }]
+                links.push(ExtractedLink {
+                    text: title.clone(),
+                    href: href.clone(),
+                    rel: None,
+                });
+                vec![Inline::Link {
+                    text: title.clone(),
+                    href: href.to_string(),
+                }]
             } else {
                 vec![Inline::Text(title.clone())]
             }
         } else {
             vec![Inline::Text(title.clone())]
         };
-        blocks.push(Block::Heading { level: 2, inlines: title_inlines });
+        blocks.push(Block::Heading {
+            level: 2,
+            inlines: title_inlines,
+        });
 
         if !pub_date.is_empty() {
             blocks.push(Block::Paragraph(vec![Inline::Text(pub_date.clone())]));
@@ -230,14 +246,20 @@ fn parse_atom(root: roxmltree::Node, base_url: &Url) -> Option<BrowsePage> {
                     href: href.clone(),
                     rel: None,
                 });
-                vec![Inline::Link { text: title.clone(), href: href.to_string() }]
+                vec![Inline::Link {
+                    text: title.clone(),
+                    href: href.to_string(),
+                }]
             } else {
                 vec![Inline::Text(title.clone())]
             }
         } else {
             vec![Inline::Text(title.clone())]
         };
-        blocks.push(Block::Heading { level: 2, inlines: title_inlines });
+        blocks.push(Block::Heading {
+            level: 2,
+            inlines: title_inlines,
+        });
 
         let meta = if !published.is_empty() && !author.is_empty() {
             format!("{} · {}", published, author)

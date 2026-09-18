@@ -1,8 +1,8 @@
 use std::path::Path;
+use stillo_core::document::{FetchError, RawHtml};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use url::Url;
-use stillo_core::document::{FetchError, RawHtml};
 
 /// Playwright デーモン（`playwright-daemon/daemon.js`）経由でSPAのHTMLを取得する。
 ///
@@ -10,10 +10,7 @@ use stillo_core::document::{FetchError, RawHtml};
 ///   request : `{"url":"https://..."}\n`
 ///   response: `{"html":"...","url":"https://...","status":200}\n`
 ///             `{"error":"..."}\n`（失敗時）
-pub async fn fetch_via_playwright(
-    socket_path: &Path,
-    url: &Url,
-) -> Result<RawHtml, FetchError> {
+pub async fn fetch_via_playwright(socket_path: &Path, url: &Url) -> Result<RawHtml, FetchError> {
     let stream = UnixStream::connect(socket_path).await.map_err(|e| {
         FetchError::DelegationFailed(format!(
             "Playwright daemon not reachable at {}: {}",

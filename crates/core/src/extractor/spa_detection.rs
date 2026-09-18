@@ -1,5 +1,5 @@
-use markup5ever_rcdom::{Handle, NodeData};
 use crate::document::{JsFramework, SpaDetection};
+use markup5ever_rcdom::{Handle, NodeData};
 
 pub fn detect_spa(root: &Handle, text_length: usize, min_content_length: usize) -> SpaDetection {
     if text_length < min_content_length {

@@ -1,8 +1,8 @@
+use crate::document::{ExtractedContent, ExtractedLink, PageMetadata};
+use chrono::{DateTime, Utc};
 use markup5ever_rcdom::{Handle, NodeData};
 use std::collections::HashMap;
 use std::rc::Rc;
-use chrono::{DateTime, Utc};
-use crate::document::{ExtractedContent, ExtractedLink, PageMetadata};
 use url::Url;
 
 const NOISE_TAGS: &[&str] = &[
@@ -25,9 +25,7 @@ impl ReadabilityExtractor {
         let metadata = extract_metadata(root, base_url);
         let body = find_body(root);
 
-        let main_node = body.as_ref()
-            .and_then(find_main_content)
-            .or(body.clone());
+        let main_node = body.as_ref().and_then(find_main_content).or(body.clone());
 
         let (mh, mt, ml) = main_node
             .as_ref()
@@ -567,7 +565,9 @@ fn collect_meta(handle: &Handle, meta: &mut PageMetadata, base_url: &Url) {
 
             match (name_attr.as_deref(), property_attr.as_deref(), content) {
                 (Some("description"), _, Some(c)) => meta.description = Some(c),
-                (_, Some("og:description"), Some(c)) => { meta.description.get_or_insert(c); }
+                (_, Some("og:description"), Some(c)) => {
+                    meta.description.get_or_insert(c);
+                }
                 (_, Some("og:title"), Some(c)) => meta.og_title = Some(c),
                 (_, Some("og:image"), Some(c)) => meta.og_image = Some(c),
                 _ => {}
@@ -663,7 +663,10 @@ fn extract_json_ld_author(obj: &serde_json::Value) -> Option<String> {
     }
     // "author": [{"name": "Name"}, ...]
     if let Some(arr) = author.as_array() {
-        return arr.first().and_then(|a| a["name"].as_str()).map(|s| s.to_owned());
+        return arr
+            .first()
+            .and_then(|a| a["name"].as_str())
+            .map(|s| s.to_owned());
     }
     None
 }
@@ -725,13 +728,18 @@ mod tests {
 
         let dom = parse_html(html);
         let base_url = Url::parse("https://example.com/article").unwrap();
-        let extractor = ReadabilityExtractor { preserve_links: true };
+        let extractor = ReadabilityExtractor {
+            preserve_links: true,
+        };
         let content = extractor.extract(&dom.document, &base_url);
 
         assert_eq!(content.metadata.author.as_deref(), Some("山田太郎"));
         assert!(content.metadata.published_at.is_some());
         assert!(content.metadata.date_modified.is_some());
-        assert_eq!(content.metadata.description.as_deref(), Some("これはテスト記事の説明です"));
+        assert_eq!(
+            content.metadata.description.as_deref(),
+            Some("これはテスト記事の説明です")
+        );
 
         let published = content.metadata.published_at.unwrap();
         assert_eq!(published.format("%Y-%m-%d").to_string(), "2026-05-19");
@@ -750,12 +758,19 @@ mod tests {
 
         let dom = parse_html(html);
         let base_url = Url::parse("https://example.com/").unwrap();
-        let extractor = ReadabilityExtractor { preserve_links: false };
+        let extractor = ReadabilityExtractor {
+            preserve_links: false,
+        };
         let content = extractor.extract(&dom.document, &base_url);
 
         assert_eq!(content.metadata.author.as_deref(), Some("鈴木花子"));
         assert_eq!(
-            content.metadata.published_at.unwrap().format("%Y-%m-%d").to_string(),
+            content
+                .metadata
+                .published_at
+                .unwrap()
+                .format("%Y-%m-%d")
+                .to_string(),
             "2026-01-01"
         );
     }
@@ -770,7 +785,9 @@ mod tests {
 
         let dom = parse_html(html);
         let base_url = Url::parse("https://example.com/").unwrap();
-        let extractor = ReadabilityExtractor { preserve_links: false };
+        let extractor = ReadabilityExtractor {
+            preserve_links: false,
+        };
         let content = extractor.extract(&dom.document, &base_url);
 
         // 配列の場合は最初の著者を採用
@@ -780,10 +797,14 @@ mod tests {
     #[test]
     #[ignore = "requires /tmp/rust_wiki.html (run: curl -s https://en.wikipedia.org/wiki/Rust_\\(programming_language\\) > /tmp/rust_wiki.html)"]
     fn test_json_ld_wikipedia_real_html() {
-        let html = std::fs::read_to_string("/tmp/rust_wiki.html").expect("need /tmp/rust_wiki.html");
+        let html =
+            std::fs::read_to_string("/tmp/rust_wiki.html").expect("need /tmp/rust_wiki.html");
         let dom = parse_html(&html);
-        let base_url = Url::parse("https://en.wikipedia.org/wiki/Rust_(programming_language)").unwrap();
-        let extractor = ReadabilityExtractor { preserve_links: false };
+        let base_url =
+            Url::parse("https://en.wikipedia.org/wiki/Rust_(programming_language)").unwrap();
+        let extractor = ReadabilityExtractor {
+            preserve_links: false,
+        };
         let content = extractor.extract(&dom.document, &base_url);
 
         let meta = &content.metadata;
@@ -810,7 +831,9 @@ mod tests {
 
         let dom = parse_html(html);
         let base_url = Url::parse("https://example.com/").unwrap();
-        let extractor = ReadabilityExtractor { preserve_links: false };
+        let extractor = ReadabilityExtractor {
+            preserve_links: false,
+        };
         let content = extractor.extract(&dom.document, &base_url);
 
         assert_eq!(content.metadata.description.as_deref(), Some("OGPの説明"));
@@ -871,7 +894,10 @@ mod tests {
         assert!(is_noise(&aside), "sidebar クラスはノイズ");
 
         let ad_div = find_tag(&dom.document, "div").unwrap();
-        assert!(is_noise(&ad_div), "id=ad-container はノイズ（ad コンポーネント一致）");
+        assert!(
+            is_noise(&ad_div),
+            "id=ad-container はノイズ（ad コンポーネント一致）"
+        );
 
         let main = find_tag(&dom.document, "main").unwrap();
         assert!(!is_noise(&main), "main はノイズではない");
@@ -894,7 +920,8 @@ mod tests {
     /// shadow-2xs ラッパー内の本文が抽出されること（エンドツーエンド回帰）。
     #[test]
     fn test_extract_content_inside_shadow_wrapper() {
-        let article = "これは記事の本文です。十分な長さを持たせて抽出対象になるようにしています。".repeat(3);
+        let article =
+            "これは記事の本文です。十分な長さを持たせて抽出対象になるようにしています。".repeat(3);
         let html = format!(
             r#"<!DOCTYPE html><html><head><title>テスト記事</title></head><body>
 <div class="shadow-2xs"><article><h1>記事タイトル</h1><p>{}</p></article></div>
@@ -903,7 +930,9 @@ mod tests {
         );
         let dom = parse_html(&html);
         let base_url = Url::parse("https://dev.example.jp/articles/1").unwrap();
-        let extractor = ReadabilityExtractor { preserve_links: true };
+        let extractor = ReadabilityExtractor {
+            preserve_links: true,
+        };
         let content = extractor.extract(&dom.document, &base_url);
 
         assert!(

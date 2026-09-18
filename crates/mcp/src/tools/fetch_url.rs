@@ -4,7 +4,9 @@ use stillo_core::{ContentExtractor, ExtractorConfig, MarkdownConfig, MarkdownSer
 use stillo_fetcher::{HttpConfig, HttpFetcher};
 
 pub async fn run(args: &Value) -> Result<String> {
-    let url_str = args["url"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'url'"))?;
+    let url_str = args["url"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'url'"))?;
     let url: url::Url = url_str.parse()?;
 
     let format = args["format"].as_str().unwrap_or("markdown");

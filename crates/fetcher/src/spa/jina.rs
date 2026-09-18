@@ -1,6 +1,6 @@
 use reqwest::Client;
-use url::Url;
 use stillo_core::document::{FetchError, RawHtml};
+use url::Url;
 
 /// Jina Reader API 経由でページを取得する。
 /// Jina はページの Markdown を返す。レスポンスを解析してタイトルと本文を分離し、
@@ -28,7 +28,10 @@ pub async fn fetch_via_jina(
 
     let status = resp.status().as_u16();
     if status >= 400 {
-        return Err(FetchError::Http { status, url: url.clone() });
+        return Err(FetchError::Http {
+            status,
+            url: url.clone(),
+        });
     }
 
     let body = resp

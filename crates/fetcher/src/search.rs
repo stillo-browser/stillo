@@ -45,13 +45,19 @@ impl SearchBackend {
                     tracing::warn!("STILLO_SEARCH_BACKEND=searxng だが SEARXNG_URL が未設定。デフォルトチェーンにフォールバック");
                 }
                 "brave" => {
-                    if let Some(key) = std::env::var("BRAVE_API_KEY").ok().filter(|k| !k.is_empty()) {
+                    if let Some(key) = std::env::var("BRAVE_API_KEY")
+                        .ok()
+                        .filter(|k| !k.is_empty())
+                    {
                         return vec![SearchBackend::Brave { api_key: key }];
                     }
                     tracing::warn!("STILLO_SEARCH_BACKEND=brave だが BRAVE_API_KEY が未設定。デフォルトチェーンにフォールバック");
                 }
                 other => {
-                    tracing::warn!("未知の STILLO_SEARCH_BACKEND={:?}。デフォルトチェーンを使用", other);
+                    tracing::warn!(
+                        "未知の STILLO_SEARCH_BACKEND={:?}。デフォルトチェーンを使用",
+                        other
+                    );
                 }
             }
         }
@@ -60,7 +66,10 @@ impl SearchBackend {
         if let Some(base_url) = searxng_base_url() {
             backends.push(SearchBackend::Searxng { base_url });
         }
-        if let Some(key) = std::env::var("BRAVE_API_KEY").ok().filter(|k| !k.is_empty()) {
+        if let Some(key) = std::env::var("BRAVE_API_KEY")
+            .ok()
+            .filter(|k| !k.is_empty())
+        {
             backends.push(SearchBackend::Brave { api_key: key });
         }
         backends.push(SearchBackend::DuckDuckGo);
@@ -82,7 +91,11 @@ fn searxng_base_url() -> Option<Url> {
         .ok()
         .filter(|s| !s.trim().is_empty())
         .and_then(|s| {
-            let normalized = if s.ends_with('/') { s } else { format!("{}/", s) };
+            let normalized = if s.ends_with('/') {
+                s
+            } else {
+                format!("{}/", s)
+            };
             normalized.parse::<Url>().ok()
         })
 }
@@ -157,12 +170,16 @@ async fn search_with(
             let results = parse_ddg_results(&html);
             // 非ブロックだが結果0件 + anomaly の残骸がある場合はブロック扱いにする
             if results.is_empty() && html.contains("anomaly") {
-                return Err(SearchError::Http("blocked (empty results with anomaly markers)".into()));
+                return Err(SearchError::Http(
+                    "blocked (empty results with anomaly markers)".into(),
+                ));
             }
             Ok(results)
         }
         SearchBackend::Searxng { base_url } => {
-            let mut url = base_url.join("search").map_err(|_| SearchError::InvalidQuery)?;
+            let mut url = base_url
+                .join("search")
+                .map_err(|_| SearchError::InvalidQuery)?;
             url.query_pairs_mut()
                 .append_pair("q", query.trim())
                 .append_pair("format", "json");
@@ -185,15 +202,18 @@ async fn search_with(
                 .map_err(|_| SearchError::InvalidQuery)?;
             url.query_pairs_mut().append_pair("q", query.trim());
             let raw = fetcher
-                .fetch_with_headers(&url, &[("Accept", "application/json"), ("X-Subscription-Token", api_key)])
+                .fetch_with_headers(
+                    &url,
+                    &[
+                        ("Accept", "application/json"),
+                        ("X-Subscription-Token", api_key),
+                    ],
+                )
                 .await
                 .map_err(|e| SearchError::Http(e.to_string()))?;
             let text = String::from_utf8_lossy(&raw.bytes);
             if detect_blocked_page(raw.status, &text) {
-                return Err(SearchError::Http(format!(
-                    "blocked (HTTP {})",
-                    raw.status
-                )));
+                return Err(SearchError::Http(format!("blocked (HTTP {})", raw.status)));
             }
             parse_brave_results(&text)
                 .ok_or_else(|| SearchError::Http("invalid Brave Search JSON response".into()))

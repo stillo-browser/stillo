@@ -104,15 +104,48 @@ impl Parser {
                 self.skip_tag = Some(tag.to_owned());
                 self.skip_depth = 1;
             }
-            "h1" => { self.push_current_block(); self.heading_level = Some(1); self.in_para = true; }
-            "h2" => { self.push_current_block(); self.heading_level = Some(2); self.in_para = true; }
-            "h3" => { self.push_current_block(); self.heading_level = Some(3); self.in_para = true; }
-            "h4" => { self.push_current_block(); self.heading_level = Some(4); self.in_para = true; }
-            "h5" => { self.push_current_block(); self.heading_level = Some(5); self.in_para = true; }
-            "h6" => { self.push_current_block(); self.heading_level = Some(6); self.in_para = true; }
-            "p" => { self.push_current_block(); self.in_para = true; }
-            "br" => { self.flush_text(); self.current_inlines.push(Inline::SoftBreak); }
-            "hr" => { self.push_current_block(); self.doc.blocks.push(Block::Rule); }
+            "h1" => {
+                self.push_current_block();
+                self.heading_level = Some(1);
+                self.in_para = true;
+            }
+            "h2" => {
+                self.push_current_block();
+                self.heading_level = Some(2);
+                self.in_para = true;
+            }
+            "h3" => {
+                self.push_current_block();
+                self.heading_level = Some(3);
+                self.in_para = true;
+            }
+            "h4" => {
+                self.push_current_block();
+                self.heading_level = Some(4);
+                self.in_para = true;
+            }
+            "h5" => {
+                self.push_current_block();
+                self.heading_level = Some(5);
+                self.in_para = true;
+            }
+            "h6" => {
+                self.push_current_block();
+                self.heading_level = Some(6);
+                self.in_para = true;
+            }
+            "p" => {
+                self.push_current_block();
+                self.in_para = true;
+            }
+            "br" => {
+                self.flush_text();
+                self.current_inlines.push(Inline::SoftBreak);
+            }
+            "hr" => {
+                self.push_current_block();
+                self.doc.blocks.push(Block::Rule);
+            }
             "ul" => {
                 self.push_current_block();
                 self.list_depth += 1;
@@ -162,8 +195,14 @@ impl Parser {
                 self.in_blockquote = true;
                 self.in_para = true;
             }
-            "strong" | "b" => { self.flush_text(); self.bold = true; }
-            "em" | "i" => { self.flush_text(); self.italic = true; }
+            "strong" | "b" => {
+                self.flush_text();
+                self.bold = true;
+            }
+            "em" | "i" => {
+                self.flush_text();
+                self.italic = true;
+            }
             "a" => {
                 self.flush_text();
                 let raw_href = extract_attr(attrs, "href").unwrap_or_default();
@@ -172,7 +211,8 @@ impl Parser {
                 let href = if raw_href.is_empty() || self.is_page_anchor(&raw_href) {
                     String::new()
                 } else {
-                    self.base_url.join(&raw_href)
+                    self.base_url
+                        .join(&raw_href)
                         .map(|u| u.to_string())
                         .unwrap_or(raw_href)
                 };
@@ -236,8 +276,14 @@ impl Parser {
                 self.in_blockquote = false;
                 self.in_para = false;
             }
-            "strong" | "b" => { self.flush_text(); self.bold = false; }
-            "em" | "i" => { self.flush_text(); self.italic = false; }
+            "strong" | "b" => {
+                self.flush_text();
+                self.bold = false;
+            }
+            "em" | "i" => {
+                self.flush_text();
+                self.italic = false;
+            }
             "a" => {
                 self.flush_text();
                 if let Some((href, text)) = self.link_stack.pop() {
@@ -305,7 +351,12 @@ impl Parser {
             let ordered = self.list_ordered.last().copied().unwrap_or(false);
             let number = self.list_counters.last().copied().unwrap_or(1);
             self.in_list_item = false;
-            Block::ListItem { depth, ordered, number, inlines }
+            Block::ListItem {
+                depth,
+                ordered,
+                number,
+                inlines,
+            }
         } else if self.in_blockquote {
             Block::Blockquote(inlines)
         } else {
@@ -339,13 +390,22 @@ impl Parser {
 
 fn parse_tag_inner(inner: &str) -> (String, &str, bool, bool) {
     let is_self_closing = inner.ends_with('/');
-    let trimmed = if is_self_closing { &inner[..inner.len() - 1] } else { inner };
+    let trimmed = if is_self_closing {
+        &inner[..inner.len() - 1]
+    } else {
+        inner
+    };
     let is_closing = trimmed.starts_with('/');
     let body = if is_closing { &trimmed[1..] } else { trimmed }.trim();
     let (tag_name, attrs) = body
         .split_once(|c: char| c.is_whitespace())
         .unwrap_or((body, ""));
-    (tag_name.to_lowercase(), attrs.trim(), is_closing, is_self_closing)
+    (
+        tag_name.to_lowercase(),
+        attrs.trim(),
+        is_closing,
+        is_self_closing,
+    )
 }
 
 fn extract_attr(attrs: &str, name: &str) -> Option<String> {

@@ -22,10 +22,16 @@ pub struct Message {
 
 impl Message {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: content.into() }
+        Self {
+            role: "system".into(),
+            content: content.into(),
+        }
     }
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: "user".into(), content: content.into() }
+        Self {
+            role: "user".into(),
+            content: content.into(),
+        }
     }
 }
 
@@ -37,7 +43,10 @@ pub struct CompletionConfig {
 
 impl Default for CompletionConfig {
     fn default() -> Self {
-        Self { max_tokens: 1024, temperature: 0.3 }
+        Self {
+            max_tokens: 1024,
+            temperature: 0.3,
+        }
     }
 }
 
@@ -61,8 +70,8 @@ impl LlmProvider {
 
         if api_key.is_some() || base_url.is_some() {
             let key = api_key.unwrap_or_else(|| "proxy-managed".to_owned());
-            let model = std::env::var("ANTHROPIC_MODEL")
-                .unwrap_or_else(|_| "claude-sonnet-4-5".to_owned());
+            let model =
+                std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-4-5".to_owned());
             let url = base_url.unwrap_or_else(|| "https://api.anthropic.com".to_owned());
             return Ok(Self::Anthropic(AnthropicClient::new(key, model, url)));
         }
@@ -72,8 +81,7 @@ impl LlmProvider {
                 .ok()
                 .and_then(|u| u.parse().ok())
                 .unwrap_or_else(|| "https://api.openai.com/".parse().unwrap());
-            let model = std::env::var("OPENAI_MODEL")
-                .unwrap_or_else(|_| "gpt-4o-mini".to_owned());
+            let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_owned());
             return Ok(Self::OpenAiCompat(OpenAiCompatClient::new(
                 base_url,
                 Some(api_key),
@@ -83,11 +91,13 @@ impl LlmProvider {
 
         // llama.cpp サーバー: OpenAI 互換 API を持つがキー不要
         if let Ok(url_str) = std::env::var("LLAMA_CPP_BASE_URL") {
-            let base_url = url_str.parse()
+            let base_url = url_str
+                .parse()
                 .map_err(|_| LlmError::Http(format!("invalid LLAMA_CPP_BASE_URL: {}", url_str)))?;
-            let model = std::env::var("LLAMA_CPP_MODEL")
-                .unwrap_or_else(|_| "default".to_owned());
-            return Ok(Self::OpenAiCompat(OpenAiCompatClient::new(base_url, None, model)));
+            let model = std::env::var("LLAMA_CPP_MODEL").unwrap_or_else(|_| "default".to_owned());
+            return Ok(Self::OpenAiCompat(OpenAiCompatClient::new(
+                base_url, None, model,
+            )));
         }
 
         // Ollama をローカルフォールバックとして試みる
@@ -95,9 +105,10 @@ impl LlmProvider {
             .ok()
             .and_then(|u| u.parse().ok())
             .unwrap_or_else(|| "http://localhost:11434/".parse().unwrap());
-        let model = std::env::var("OLLAMA_MODEL")
-            .unwrap_or_else(|_| "llama3".to_owned());
-        Ok(Self::OpenAiCompat(OpenAiCompatClient::new(base_url, None, model)))
+        let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3".to_owned());
+        Ok(Self::OpenAiCompat(OpenAiCompatClient::new(
+            base_url, None, model,
+        )))
     }
 
     pub async fn complete(
@@ -158,7 +169,8 @@ impl AnthropicClient {
         });
 
         let endpoint = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
-        let resp = self.http
+        let resp = self
+            .http
             .post(&endpoint)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
@@ -168,10 +180,16 @@ impl AnthropicClient {
             .map_err(|e| LlmError::Http(e.to_string()))?;
 
         let status = resp.status().as_u16();
-        let text = resp.text().await.map_err(|e| LlmError::Http(e.to_string()))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| LlmError::Http(e.to_string()))?;
 
         if status >= 400 {
-            return Err(LlmError::Api { status, message: text });
+            return Err(LlmError::Api {
+                status,
+                message: text,
+            });
         }
 
         parse_anthropic_response(&text)
@@ -190,8 +208,8 @@ fn parse_anthropic_response(text: &str) -> Result<String, LlmError> {
         text: Option<String>,
     }
 
-    let resp: Resp = serde_json::from_str(text)
-        .map_err(|e| LlmError::Parse(format!("{}: {}", e, text)))?;
+    let resp: Resp =
+        serde_json::from_str(text).map_err(|e| LlmError::Parse(format!("{}: {}", e, text)))?;
     resp.content
         .into_iter()
         .find(|b| b.kind == "text")
@@ -238,7 +256,8 @@ impl OpenAiCompatClient {
             "messages": msgs,
         });
 
-        let endpoint = self.base_url
+        let endpoint = self
+            .base_url
             .join("v1/chat/completions")
             .map_err(|e| LlmError::Http(e.to_string()))?;
 
@@ -247,12 +266,21 @@ impl OpenAiCompatClient {
             req = req.bearer_auth(key);
         }
 
-        let resp = req.send().await.map_err(|e| LlmError::Http(e.to_string()))?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| LlmError::Http(e.to_string()))?;
         let status = resp.status().as_u16();
-        let text = resp.text().await.map_err(|e| LlmError::Http(e.to_string()))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| LlmError::Http(e.to_string()))?;
 
         if status >= 400 {
-            return Err(LlmError::Api { status, message: text });
+            return Err(LlmError::Api {
+                status,
+                message: text,
+            });
         }
 
         parse_openai_response(&text)
@@ -273,8 +301,8 @@ fn parse_openai_response(text: &str) -> Result<String, LlmError> {
         content: String,
     }
 
-    let resp: Resp = serde_json::from_str(text)
-        .map_err(|e| LlmError::Parse(format!("{}: {}", e, text)))?;
+    let resp: Resp =
+        serde_json::from_str(text).map_err(|e| LlmError::Parse(format!("{}: {}", e, text)))?;
     resp.choices
         .into_iter()
         .next()

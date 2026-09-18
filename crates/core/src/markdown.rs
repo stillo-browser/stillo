@@ -1,5 +1,5 @@
-use chrono::Utc;
 use crate::document::{ExtractedContent, MarkdownDocument};
+use chrono::Utc;
 
 #[derive(Debug, Clone)]
 pub struct MarkdownConfig {
@@ -163,7 +163,10 @@ impl HtmlToMarkdown {
             }
             ("li", false) => {
                 let indent = "  ".repeat(self.list_depth.saturating_sub(1));
-                let counter_val = self.ordered_counters.last_mut().map(|c| { *c += 1; *c });
+                let counter_val = self.ordered_counters.last_mut().map(|c| {
+                    *c += 1;
+                    *c
+                });
                 match counter_val {
                     Some(n) => self.push_str(&format!("\n{}{}. ", indent, n)),
                     None => self.push_str(&format!("\n{}- ", indent)),
@@ -177,7 +180,8 @@ impl HtmlToMarkdown {
                 let href = if raw_href.is_empty() {
                     raw_href
                 } else {
-                    self.base_url.join(&raw_href)
+                    self.base_url
+                        .join(&raw_href)
                         .map(|u| u.to_string())
                         .unwrap_or(raw_href)
                 };
@@ -216,14 +220,24 @@ impl HtmlToMarkdown {
 
 fn parse_tag(inner: &str) -> (String, &str, bool, bool) {
     let is_self_closing = inner.ends_with('/');
-    let trimmed = if is_self_closing { &inner[..inner.len() - 1] } else { inner };
+    let trimmed = if is_self_closing {
+        &inner[..inner.len() - 1]
+    } else {
+        inner
+    };
     let is_closing = trimmed.starts_with('/');
     let body = if is_closing { &trimmed[1..] } else { trimmed };
     let body = body.trim();
 
-    let (tag_name, attrs) = body.split_once(|c: char| c.is_whitespace())
+    let (tag_name, attrs) = body
+        .split_once(|c: char| c.is_whitespace())
         .unwrap_or((body, ""));
-    (tag_name.to_lowercase(), attrs.trim(), is_closing, is_self_closing)
+    (
+        tag_name.to_lowercase(),
+        attrs.trim(),
+        is_closing,
+        is_self_closing,
+    )
 }
 
 fn extract_attr(attrs: &str, name: &str) -> Option<String> {

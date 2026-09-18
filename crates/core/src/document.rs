@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-use chrono::{DateTime, Utc};
-use url::Url;
 use crate::ast::Document;
+use chrono::{DateTime, Utc};
+use std::path::PathBuf;
+use url::Url;
 
 #[derive(Debug, Clone)]
 pub struct RawHtml {

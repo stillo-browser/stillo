@@ -7,11 +7,22 @@ pub struct Document {
 
 #[derive(Debug, Clone)]
 pub enum Block {
-    Heading { level: u8, inlines: Vec<Inline> },
+    Heading {
+        level: u8,
+        inlines: Vec<Inline>,
+    },
     Paragraph(Vec<Inline>),
     /// 深さ情報付きリストアイテム（フラット構造で深さをインデントで表現）
-    ListItem { depth: usize, ordered: bool, number: usize, inlines: Vec<Inline> },
-    CodeBlock { lang: Option<String>, content: String },
+    ListItem {
+        depth: usize,
+        ordered: bool,
+        number: usize,
+        inlines: Vec<Inline>,
+    },
+    CodeBlock {
+        lang: Option<String>,
+        content: String,
+    },
     Blockquote(Vec<Inline>),
     Rule,
 }
