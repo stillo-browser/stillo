@@ -1,13 +1,19 @@
 use markup5ever_rcdom::{Handle, NodeData};
-use url::Url;
 use std::collections::HashMap;
 use std::rc::Rc;
 use chrono::{DateTime, Utc};
 use crate::document::{ExtractedContent, ExtractedLink, PageMetadata};
+use url::Url;
 
-const NOISE_TAGS: &[&str] = &["nav", "header", "footer", "aside", "script", "style", "noscript", "iframe", "form"];
-const NOISE_CLASS_PATTERNS: &[&str] = &["nav", "sidebar", "menu", "ad", "banner", "comment", "footer", "header", "widget"];
-const CONTENT_CLASS_PATTERNS: &[&str] = &["article", "content", "main", "post", "entry", "body", "text"];
+const NOISE_TAGS: &[&str] = &[
+    "nav", "header", "footer", "aside", "script", "style", "noscript", "iframe", "form",
+];
+const NOISE_CLASS_PATTERNS: &[&str] = &[
+    "nav", "sidebar", "menu", "ad", "banner", "comment", "footer", "header", "widget",
+];
+const CONTENT_CLASS_PATTERNS: &[&str] = &[
+    "article", "content", "main", "post", "entry", "body", "text",
+];
 
 pub struct ReadabilityExtractor {
     pub preserve_links: bool,
@@ -56,11 +62,22 @@ impl ReadabilityExtractor {
         }
     }
 
-    fn serialize_content(&self, handle: &Handle, base_url: &Url) -> (String, String, Vec<ExtractedLink>) {
+    fn serialize_content(
+        &self,
+        handle: &Handle,
+        base_url: &Url,
+    ) -> (String, String, Vec<ExtractedLink>) {
         let mut html = String::new();
         let mut text = String::new();
         let mut links = Vec::new();
-        serialize_node(handle, &mut html, &mut text, &mut links, base_url, self.preserve_links);
+        serialize_node(
+            handle,
+            &mut html,
+            &mut text,
+            &mut links,
+            base_url,
+            self.preserve_links,
+        );
         (html, text, links)
     }
 }
@@ -100,7 +117,11 @@ fn find_main_content(body: &Handle) -> Option<Handle> {
         .map(|(h, raw)| {
             let text_len = count_text(&h) as f64;
             let link_len = count_link_text(&h) as f64;
-            let density = if text_len > 0.0 { link_len / text_len } else { 1.0 };
+            let density = if text_len > 0.0 {
+                link_len / text_len
+            } else {
+                1.0
+            };
             let bonus = class_score(&h);
             let score = (raw + bonus) * (1.0 - density);
             (h, score)
@@ -139,9 +160,14 @@ fn try_sibling_expand(node: &Handle) -> Option<Handle> {
             _ => return None,
         };
 
-        let same_tag_count = parent.children.borrow().iter()
-            .filter(|c| matches!(&c.data,
-                NodeData::Element { name, .. } if name.local.as_ref() == current_tag))
+        let same_tag_count = parent
+            .children
+            .borrow()
+            .iter()
+            .filter(|c| {
+                matches!(&c.data,
+                NodeData::Element { name, .. } if name.local.as_ref() == current_tag)
+            })
             .count();
 
         if same_tag_count >= 3 {
@@ -214,7 +240,10 @@ fn leaf_content_score(handle: &Handle, tag: &str) -> f64 {
 
 /// スコアを受け取るコンテナ候補として有効なタグ
 fn is_candidate_tag(tag: &str) -> bool {
-    matches!(tag, "div" | "section" | "article" | "main" | "blockquote" | "pre" | "td" | "tbody" | "p")
+    matches!(
+        tag,
+        "div" | "section" | "article" | "main" | "blockquote" | "pre" | "td" | "tbody" | "p"
+    )
 }
 
 fn class_score(handle: &Handle) -> f64 {
@@ -360,10 +389,12 @@ fn serialize_node(
             match tag {
                 "script" | "style" | "noscript" | "iframe" => (),
                 "a" if preserve_links => {
-                    let href = attrs_ref.iter()
+                    let href = attrs_ref
+                        .iter()
                         .find(|a| a.name.local.as_ref() == "href")
                         .map(|a| a.value.as_ref().to_owned());
-                    let rel = attrs_ref.iter()
+                    let rel = attrs_ref
+                        .iter()
                         .find(|a| a.name.local.as_ref() == "rel")
                         .map(|a| a.value.as_ref().to_owned());
 
@@ -378,7 +409,14 @@ fn serialize_node(
                     let mut link_text = String::new();
                     let mut link_html = String::new();
                     for child in handle.children.borrow().iter() {
-                        serialize_node(child, &mut link_html, text, links, base_url, preserve_links);
+                        serialize_node(
+                            child,
+                            &mut link_html,
+                            text,
+                            links,
+                            base_url,
+                            preserve_links,
+                        );
                         collect_text(child, &mut link_text);
                     }
                     html.push_str(&link_html);
@@ -399,10 +437,31 @@ fn serialize_node(
                 }
                 _ => {
                     // ブロック要素
-                    let is_block = matches!(tag, "p" | "div" | "section" | "article" |
-                        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" |
-                        "ul" | "ol" | "li" | "blockquote" | "pre" | "br" | "hr" |
-                        "table" | "tr" | "td" | "th" | "thead" | "tbody");
+                    let is_block = matches!(
+                        tag,
+                        "p" | "div"
+                            | "section"
+                            | "article"
+                            | "h1"
+                            | "h2"
+                            | "h3"
+                            | "h4"
+                            | "h5"
+                            | "h6"
+                            | "ul"
+                            | "ol"
+                            | "li"
+                            | "blockquote"
+                            | "pre"
+                            | "br"
+                            | "hr"
+                            | "table"
+                            | "tr"
+                            | "td"
+                            | "th"
+                            | "thead"
+                            | "tbody"
+                    );
 
                     if is_block {
                         html.push('<');
@@ -431,7 +490,7 @@ fn serialize_node(
     }
 }
 
-fn collect_text(handle: &Handle, out: &mut String) {
+pub(crate) fn collect_text(handle: &Handle, out: &mut String) {
     match &handle.data {
         NodeData::Text { contents } => {
             out.push_str(contents.borrow().as_ref());
@@ -493,13 +552,16 @@ fn collect_meta(handle: &Handle, meta: &mut PageMetadata, base_url: &Url) {
         let attrs_ref = attrs.borrow();
 
         if tag == "meta" {
-            let name_attr = attrs_ref.iter()
+            let name_attr = attrs_ref
+                .iter()
                 .find(|a| a.name.local.as_ref() == "name")
                 .map(|a| a.value.as_ref().to_lowercase());
-            let property_attr = attrs_ref.iter()
+            let property_attr = attrs_ref
+                .iter()
                 .find(|a| a.name.local.as_ref() == "property")
                 .map(|a| a.value.as_ref().to_lowercase());
-            let content = attrs_ref.iter()
+            let content = attrs_ref
+                .iter()
                 .find(|a| a.name.local.as_ref() == "content")
                 .map(|a| a.value.as_ref().to_owned());
 
@@ -511,10 +573,12 @@ fn collect_meta(handle: &Handle, meta: &mut PageMetadata, base_url: &Url) {
                 _ => {}
             };
         } else if tag == "link" {
-            let is_canonical = attrs_ref.iter()
+            let is_canonical = attrs_ref
+                .iter()
                 .any(|a| a.name.local.as_ref() == "rel" && a.value.as_ref() == "canonical");
             if is_canonical {
-                if let Some(href) = attrs_ref.iter()
+                if let Some(href) = attrs_ref
+                    .iter()
                     .find(|a| a.name.local.as_ref() == "href")
                     .and_then(|a| base_url.join(a.value.as_ref()).ok())
                 {
