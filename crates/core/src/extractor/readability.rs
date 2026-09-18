@@ -1,4 +1,3 @@
-use crate::document::{ExtractedContent, ExtractedLink, PageMetadata};
 use markup5ever_rcdom::{Handle, NodeData};
 use std::collections::HashMap;
 use std::rc::Rc;
