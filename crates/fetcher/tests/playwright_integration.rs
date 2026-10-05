@@ -24,11 +24,27 @@ fn daemon_js() -> PathBuf {
     workspace_root().join("playwright-daemon").join("daemon.js")
 }
 
+/// Playwright デーモンを実際に起動できる環境か。
+///
+/// node_modules の有無だけでなく `node` 本体が PATH にあるかも見る。sandbox ビルド
+/// （nix build）では node_modules がソースに含まれていても node が無いため、
+/// start_daemon の spawn で panic する前にスキップさせる。
 fn daemon_installed() -> bool {
     workspace_root()
         .join("playwright-daemon")
         .join("node_modules")
         .exists()
+        && node_available()
+}
+
+fn node_available() -> bool {
+    std::process::Command::new("node")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// テスト用 Unix ソケットパスを一意に生成する（並列テスト対策: PID + スレッドID）
@@ -110,7 +126,7 @@ async fn start_daemon(socket_path: &Path) -> tokio::process::Child {
 async fn test_playwright_fetches_js_rendered_content() {
     if !daemon_installed() {
         eprintln!(
-            "playwright-daemon/node_modules が見つかりません。npm install を実行してください。"
+            "playwright-daemon/node_modules か node コマンドが見つかりません。npm install を実行してください。"
         );
         return;
     }

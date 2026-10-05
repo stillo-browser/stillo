@@ -10,6 +10,38 @@ stilloはターミナル上で動作するブラウザです。静的なHTMLペ�
 
 ## インストール
 
+### Nix (flake)
+
+```bash
+# ビルドして result/bin/stillo を使う
+nix build github:stillo-browser/stillo
+
+# ユーザープロファイルにインストール
+nix profile install github:stillo-browser/stillo
+
+# インストールせず直接実行
+nix run github:stillo-browser/stillo -- dump https://example.com
+```
+
+自分の nixpkgs に生やして home-manager / NixOS の設定に取り込む場合:
+
+```nix
+{
+  inputs.stillo.url = "github:stillo-browser/stillo";
+
+  # 方法1: overlay 経由（pkgs.stillo が使えるようになる）
+  nixpkgs.overlays = [ inputs.stillo.overlays.default ];
+  # home.packages = [ pkgs.stillo ];
+
+  # 方法2: package を直接渡す
+  # home.packages = [ inputs.stillo.packages.${pkgs.system}.default ];
+}
+```
+
+ローカルのチェックアウトを参照するときは `path:/path/to/stillo`（`git+file:` でも可）。開発シェルは `nix develop` で入ります。
+
+### Cargo
+
 ```bash
 cargo build --release
 # バイナリは target/release/stillo に生成されます
