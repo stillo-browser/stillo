@@ -28,6 +28,15 @@ fn is_unsafe_control(c: char) -> bool {
     c.is_control() && c != '\n' && c != '\t'
 }
 
+/// リンクとして扱ってよい URL か（http / https / mailto のみ許可）。
+///
+/// `javascript:` や `data:` をリンクとして残すと、MCP 経由で受け取った LLM や
+/// リンクを開く外部ブラウザがスクリプトを実行しうる。ターミナルブラウザが辿れるのも
+/// HTTP(S) だけなので、許可リスト方式で絞る。
+pub fn is_navigable_url(url: &url::Url) -> bool {
+    matches!(url.scheme(), "http" | "https" | "mailto")
+}
+
 impl BrowsePage {
     /// 端末表示用に、ページ内の表示文字列すべてから制御文字を除去する。
     ///

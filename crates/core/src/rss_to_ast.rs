@@ -7,7 +7,13 @@ use url::Url;
 /// RSS 2.0 / RSS 1.0 (RDF) / Atom 1.0 XML を BrowsePage に変換する。
 /// 判別不能な XML の場合は None を返す。
 pub fn parse_rss_to_ast(xml: &str, base_url: &Url) -> Option<BrowsePage> {
-    let xml_doc = roxmltree::Document::parse(xml).ok()?;
+    // RSS 0.91 は DOCTYPE 宣言付きで配信されることが多く、roxmltree の既定（DTD 拒否）では失敗する。
+    // roxmltree は外部 DTD を取得せず、エンティティ展開の再帰・回数も制限しているので許可してよい
+    let options = roxmltree::ParsingOptions {
+        allow_dtd: true,
+        ..Default::default()
+    };
+    let xml_doc = roxmltree::Document::parse_with_options(xml, options).ok()?;
     let root = xml_doc.root_element();
     match root.tag_name().name() {
         "rss" => parse_rss2(root, base_url),
@@ -216,12 +222,7 @@ fn parse_atom(root: roxmltree::Node, base_url: &Url) -> Option<BrowsePage> {
     for entry in root.children().filter(|n| n.tag_name().name() == "entry") {
         let title = child_text(&entry, "title").unwrap_or_default();
 
-        // <link href="..."> 属性からURLを取得する
-        let href_str = entry
-            .children()
-            .find(|n| n.tag_name().name() == "link")
-            .and_then(|n| n.attribute("href"))
-            .map(|s| s.to_string());
+        let href_str = atom_entry_link(&entry);
 
         let published = child_text(&entry, "published")
             .or_else(|| child_text(&entry, "updated"))
@@ -312,18 +313,118 @@ fn child_text(node: &roxmltree::Node, tag: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// HTMLタグを除去してプレーンテキストを返す。
-/// description や summary に HTML が混入することが多いため除去する。
+/// Atom の entry から記事本体へのリンクを選ぶ。
+///
+/// rel 省略は alternate と同義（RFC 4287 4.2.7.2）。Blogger は rel="replies"（コメントフィード）を
+/// alternate より前に置くため、先頭の link を採るとコメントフィードを指してしまう。
+/// alternate がなければ、href を持つ最初の link にフォールバックする。
+fn atom_entry_link(entry: &roxmltree::Node) -> Option<String> {
+    let links: Vec<roxmltree::Node> = entry
+        .children()
+        .filter(|n| n.tag_name().name() == "link" && n.attribute("href").is_some())
+        .collect();
+    links
+        .iter()
+        .find(|n| n.attribute("rel").is_none_or(|r| r.trim() == "alternate"))
+        .or(links.first())
+        .and_then(|n| n.attribute("href"))
+        .map(|s| s.to_string())
+}
+
+/// description / summary に混入する HTML をプレーンテキストにする。
+///
+/// 文字単位で `<`〜`>` を除去する方式では、`s &amp; t < u` のようなタグでない `<` 以降を飲み込み、
+/// エンティティもデコードされない。HTML パーサーでテキスト化してブラウザと同じ解釈にする。
 fn strip_html_tags(html: &str) -> String {
-    let mut result = String::with_capacity(html.len());
-    let mut in_tag = false;
-    for ch in html.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => result.push(ch),
-            _ => {}
+    let dom = crate::extractor::parse_html(html);
+    let mut text = String::new();
+    collect_visible_text(&dom.document, &mut text);
+    crate::html_to_ast::collapse_whitespace(&text)
+        .trim()
+        .to_string()
+}
+
+fn collect_visible_text(handle: &markup5ever_rcdom::Handle, out: &mut String) {
+    use markup5ever_rcdom::NodeData;
+    match &handle.data {
+        NodeData::Text { contents } => out.push_str(&contents.borrow()),
+        NodeData::Element { name, .. } => {
+            let tag = name.local.as_ref();
+            if matches!(tag, "script" | "style" | "template") {
+                return;
+            }
+            // ブロック要素の境界で語が連結しないよう空白を挟む（後で 1 つに畳む）
+            let block = matches!(tag, "br" | "p" | "li" | "tr" | "td" | "th")
+                || crate::html_to_ast::is_generic_block(tag);
+            if block {
+                out.push(' ');
+            }
+            for child in handle.children.borrow().iter() {
+                collect_visible_text(child, out);
+            }
+            if block {
+                out.push(' ');
+            }
+        }
+        _ => {
+            for child in handle.children.borrow().iter() {
+                collect_visible_text(child, out);
+            }
         }
     }
-    result.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base() -> Url {
+        Url::parse("https://blog.example.com/feeds/posts/default").unwrap()
+    }
+
+    #[test]
+    fn test_atom_prefers_alternate_link() {
+        // Blogger は rel="replies" を rel="alternate" より前に置く
+        let xml = r#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title>Blog</title>
+<entry><title>Post</title>
+<link rel="replies" type="application/atom+xml" href="https://blog.example.com/feeds/1/comments"/>
+<link rel="edit" href="https://blog.example.com/edit/1"/>
+<link rel="alternate" type="text/html" href="https://blog.example.com/2026/01/post.html"/>
+</entry>
+<entry><title>NoRel</title>
+<link rel="replies" href="https://blog.example.com/feeds/2/comments"/>
+<link href="https://blog.example.com/2026/02/norel.html"/>
+</entry></feed>"#;
+        let page = parse_rss_to_ast(xml, &base()).unwrap();
+        let hrefs: Vec<&str> = page.links.iter().map(|l| l.href.as_str()).collect();
+        assert_eq!(
+            hrefs,
+            [
+                "https://blog.example.com/2026/01/post.html",
+                "https://blog.example.com/2026/02/norel.html"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_rss091_with_doctype_parses() {
+        let xml = r#"<?xml version="1.0"?>
+<!DOCTYPE rss PUBLIC "-//Netscape Communications//DTD RSS 0.91//EN" "http://my.netscape.com/publish/formats/rss-0.91.dtd">
+<rss version="0.91"><channel><title>Old Feed</title>
+<item><title>Item</title><link>https://example.com/item</link></item>
+</channel></rss>"#;
+        let page = parse_rss_to_ast(xml, &base()).expect("DOCTYPE 付き RSS 0.91 をパースできる");
+        assert_eq!(page.title, "Old Feed");
+        assert_eq!(page.links.len(), 1);
+    }
+
+    #[test]
+    fn test_strip_html_tags_handles_bare_lt_and_entities() {
+        assert_eq!(strip_html_tags("s &amp; t < u"), "s & t < u");
+        assert_eq!(
+            strip_html_tags("<p>a&nbsp;b</p><p>c</p><script>x()</script>"),
+            "a\u{a0}b c"
+        );
+    }
 }

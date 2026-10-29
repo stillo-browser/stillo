@@ -18,6 +18,7 @@ stillo-renderer = { path = "../renderer", version = "0.2" }
 stillo-llm = { path = "../llm", version = "0.2" }
 stillo-mcp = { path = "../mcp", version = "0.2" }
 url = { workspace = true }
+chrono = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
