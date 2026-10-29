@@ -44,6 +44,9 @@ fn is_blocked_ipv4(ip: Ipv4Addr) -> bool {
         || a == 0
         // 100.64.0.0/10（CGNAT）。Tailscale 等の社内 VPN がこの帯域を使う
         || (a == 100 && (b & 0xC0) == 64)
+        // 224.0.0.0/4 マルチキャストと 240.0.0.0/4 予約帯域。公開 Web サーバーがこの帯域に存在することはない
+        || ip.is_multicast()
+        || a >= 240
 }
 
 fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
@@ -54,6 +57,10 @@ fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
         || (first & 0xFFC0) == 0xFE80
         // fc00::/7 ユニークローカル（ULA）
         || (first & 0xFE00) == 0xFC00
+        // ff00::/8 マルチキャスト
+        || (first & 0xFF00) == 0xFF00
+        // 64:ff9b::/96 NAT64。NAT64 ゲートウェイのあるネットワークでは埋め込まれた IPv4 へ変換されて到達する
+        || (ip.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0] && is_blocked_ipv4(ipv4_tail(ip)))
         // ::/96 IPv4-compatible（非推奨形式だが ::127.0.0.1 として解釈する実装がある）
         || (ip.segments()[..6].iter().all(|s| *s == 0) && is_blocked_ipv4(ipv4_tail(ip)))
 }
@@ -158,6 +165,12 @@ mod tests {
             "::ffff:10.0.0.1",
             "::ffff:169.254.169.254",
             "::127.0.0.1",
+            "224.0.0.1",
+            "239.255.255.250",
+            "240.0.0.1",
+            "ff02::1",
+            "64:ff9b::a9fe:a9fe",
+            "64:ff9b::7f00:1",
         ] {
             assert!(is_blocked_ip(ip(s)), "{s} should be blocked");
         }
@@ -170,6 +183,8 @@ mod tests {
             "93.184.216.34",
             "172.32.0.1",
             "100.128.0.1",
+            // NAT64 経由の公開 IPv4（8.8.8.8）は許可する
+            "64:ff9b::808:808",
             "2606:4700::1111",
             "::ffff:8.8.8.8",
             "fec0::1",
