@@ -3,6 +3,7 @@ mod args;
 use anyhow::{Context, Result};
 use args::{Cli, Command, DelegateTarget, OutputFormat};
 use clap::Parser;
+use std::time::Duration;
 use stillo_core::{
     document::{DelegationTarget, SpaDetection},
     ContentExtractor, ExtractorConfig, MarkdownConfig, MarkdownSerializer,
@@ -467,9 +468,11 @@ async fn delegate_or_fallback(
     url: &Url,
     static_raw: stillo_core::document::RawHtml,
     delegate: Option<&DelegateTarget>,
-    _timeout: u64,
+    timeout: u64,
 ) -> Result<stillo_core::document::RawHtml> {
-    let chain = build_delegation_chain(delegate);
+    // 静的取得と同じ --timeout を委譲チェーン全体の期限にする。CDP の読み込み待ち等が
+    // 積み重なって指定時間を大きく超えないようにするため
+    let chain = build_delegation_chain(delegate).with_timeout(Duration::from_secs(timeout));
 
     match chain.fetch_with_js(url).await {
         Ok(delegated) => Ok(delegated),
@@ -490,9 +493,14 @@ fn build_delegation_chain(delegate: Option<&DelegateTarget>) -> SpaDelegationCha
             SpaDelegationChain::with_single_target(DelegationTarget::LocalCdp { port: 9222 })
         }
         Some(DelegateTarget::Playwright) => {
-            SpaDelegationChain::with_single_target(DelegationTarget::PlaywrightDaemon {
-                socket_path: "/tmp/stillo-playwright.sock".into(),
-            })
+            // 明示指定でも所有者を確認できないソケットには接続しない（他ユーザーのなりすまし対策）
+            let target = match stillo_fetcher::spa::playwright::discover_socket() {
+                Some(socket_path) => DelegationTarget::PlaywrightDaemon { socket_path },
+                None => DelegationTarget::Unavailable {
+                    reason: "no Playwright daemon socket owned by the current user".into(),
+                },
+            };
+            SpaDelegationChain::with_single_target(target)
         }
         Some(DelegateTarget::Jina) => {
             SpaDelegationChain::with_single_target(DelegationTarget::JinaReader {

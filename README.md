@@ -90,11 +90,11 @@ stillo dump -v https://example.com
 SPAと判定されたページは以下の優先順位で委譲を試みます（いずれかが成功すれば以降はスキップ）。
 
 1. **Chrome CDP** — `localhost:9222` でChromeが起動していれば使用
-2. **Playwright Daemon** — `/tmp/stillo-playwright.sock` が存在すれば使用
-3. **Jina Reader** — 常にフォールバック候補（`JINA_API_KEY` 設定で認証）
+2. **Playwright Daemon** — 自ユーザー所有のソケットが存在すれば使用（探索順: `STILLO_PLAYWRIGHT_SOCK` → `$XDG_RUNTIME_DIR/stillo-playwright.sock` → `/tmp/stillo-playwright.sock`）
+3. **Jina Reader** — `JINA_API_KEY` が設定されているか `STILLO_ENABLE_JINA=1` のときのみ使用（閲覧URLを外部サービスへ送信するためオプトイン）
 4. **Firecrawl** — `FIRECRAWL_URL` と `FIRECRAWL_API_KEY` が両方設定されていれば使用
 
-全ターゲットが失敗した場合は静的HTMLにフォールバックします。
+委譲チェーン全体の所要時間は `--timeout` で打ち切られます。全ターゲットが失敗した場合は静的HTMLにフォールバックします。
 
 ### Chrome CDP を使う場合
 
@@ -107,7 +107,7 @@ stillo dump https://your-spa-app.example.com
 ### Jina Reader を使う場合
 
 ```bash
-export JINA_API_KEY=your_api_key
+export JINA_API_KEY=your_api_key   # APIキーなしの無料枠を使う場合は STILLO_ENABLE_JINA=1
 stillo dump https://your-spa-app.example.com
 ```
 
@@ -160,6 +160,8 @@ stillo qa "記事の要点は？" https://example.com/article
 | `read_links` | URLからリンク一覧（テキスト・href）を抽出して返す |
 | `search_web` | Web検索して結果を返す（format=markdown\|links）。ボットブロック時はエラーを明示 |
 | `extract_structured` | LLMを使って指定フィールドをJSONで抽出する（LLM APIキーが必要） |
+
+`fetch_url`・`read_links`・`extract_structured` は取得先URLをLLMが決めるため、loopback・プライベートアドレス（RFC1918）・リンクローカル（169.254.0.0/16 等）・ULA への接続を既定で拒否します。判定はDNS解決後のIPとリダイレクトの各ホップに対して行います。拒否モードでは `HTTP_PROXY` 等のプロキシ設定を使いません。ローカルの開発サーバー等を読ませる場合は `STILLO_ALLOW_PRIVATE_NETWORK=1` を設定してください。URLスキームは http/https のみ受け付けます。CLI（`stillo dump` 等）にはこの制限はありません。
 
 ### Web検索バックエンド
 

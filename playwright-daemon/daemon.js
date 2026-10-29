@@ -13,9 +13,16 @@
 
 const net = require('net');
 const fs = require('fs');
+const path = require('path');
 const { chromium } = require('playwright');
 
-const SOCKET_PATH = process.env.STILLO_PLAYWRIGHT_SOCK || '/tmp/stillo-playwright.sock';
+// stillo 側（crates/fetcher/src/spa/playwright.rs の socket_candidates）と同じ優先順位。
+// $XDG_RUNTIME_DIR は所有者のみアクセス可能なため、誰でも書ける /tmp より優先する。
+const SOCKET_PATH =
+  process.env.STILLO_PLAYWRIGHT_SOCK ||
+  (process.env.XDG_RUNTIME_DIR
+    ? path.join(process.env.XDG_RUNTIME_DIR, 'stillo-playwright.sock')
+    : '/tmp/stillo-playwright.sock');
 const NAVIGATION_TIMEOUT_MS = 30_000;
 // load 後にバックグラウンド JS の描画を待つ固定遅延（ms）
 const POST_LOAD_DELAY_MS = 1_000;
@@ -123,6 +130,8 @@ async function main() {
   });
 
   server.listen(SOCKET_PATH, () => {
+    // /tmp に置いた場合に他ユーザーがデーモンへ接続し、自分の権限でブラウザを操作できないようにする
+    fs.chmodSync(SOCKET_PATH, 0o600);
     console.log(`Playwright daemon listening on ${SOCKET_PATH}`);
     // 親プロセスへ起動完了を通知する（テスト用）
     if (process.send) process.send('ready');
