@@ -45,11 +45,11 @@ pub enum Command {
     },
     /// TUIブラウザモード
     Browse { url: Url },
-    /// ページについてLLMに質問（LLMプロバイダーの環境変数が必要: ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL / OPENAI_API_KEY / LLAMA_CPP_BASE_URL / OLLAMA_BASE_URL）
+    /// ページについてLLMに質問（ANTHROPIC_API_KEY / OPENAI_API_KEY 環境変数が必要）
     Qa { question: String, url: Url },
-    /// ページをLLMで要約（LLMプロバイダーの環境変数が必要: qa と同じ）
+    /// ページをLLMで要約（ANTHROPIC_API_KEY / OPENAI_API_KEY 環境変数が必要）
     Summarize { url: Url },
-    /// 指定したフィールドをLLMで抽出（LLMプロバイダーの環境変数が必要: qa と同じ）
+    /// 指定したフィールドをLLMで抽出（ANTHROPIC_API_KEY / OPENAI_API_KEY 環境変数が必要）
     Extract {
         fields: String,
         url: Url,
