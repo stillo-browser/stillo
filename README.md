@@ -80,9 +80,9 @@ stillo dump -v https://example.com
 | `dump`      | ページをMarkdown/テキスト/JSONとして stdout に出力 |
 | `browse`    | TUIブラウザとして起動 |
 | `search`    | Web検索して結果をTUIで表示（`stillo search <query>`） |
-| `qa`        | ページについてLLMに質問（LLM APIキーが必要） |
-| `summarize` | ページをLLMで要約（LLM APIキーが必要） |
-| `extract`   | 指定フィールドをLLMで抽出（LLM APIキーが必要） |
+| `qa`        | ページについてLLMに質問（LLMプロバイダー設定が必要） |
+| `summarize` | ページをLLMで要約（LLMプロバイダー設定が必要） |
+| `extract`   | 指定フィールドをLLMで抽出（LLMプロバイダー設定が必要） |
 | `mcp`       | MCPサーバーとして起動（stdio transport、JSON-RPC 2.0） |
 
 ## SPA委譲
@@ -90,11 +90,11 @@ stillo dump -v https://example.com
 SPAと判定されたページは以下の優先順位で委譲を試みます（いずれかが成功すれば以降はスキップ）。
 
 1. **Chrome CDP** — `localhost:9222` でChromeが起動していれば使用
-2. **Playwright Daemon** — `/tmp/stillo-playwright.sock` が存在すれば使用
-3. **Jina Reader** — 常にフォールバック候補（`JINA_API_KEY` 設定で認証）
+2. **Playwright Daemon** — 自ユーザー所有のソケットが存在すれば使用（探索順: `STILLO_PLAYWRIGHT_SOCK` → `$XDG_RUNTIME_DIR/stillo-playwright.sock` → `/tmp/stillo-playwright.sock`）
+3. **Jina Reader** — `JINA_API_KEY` が設定されているか `STILLO_ENABLE_JINA=1` のときのみ使用（閲覧URLを外部サービスへ送信するためオプトイン）
 4. **Firecrawl** — `FIRECRAWL_URL` と `FIRECRAWL_API_KEY` が両方設定されていれば使用
 
-全ターゲットが失敗した場合は静的HTMLにフォールバックします。
+委譲チェーン全体の所要時間は `--timeout` で打ち切られます。全ターゲットが失敗した場合は静的HTMLにフォールバックします。
 
 ### Chrome CDP を使う場合
 
@@ -107,7 +107,7 @@ stillo dump https://your-spa-app.example.com
 ### Jina Reader を使う場合
 
 ```bash
-export JINA_API_KEY=your_api_key
+export JINA_API_KEY=your_api_key   # APIキーなしの無料枠を使う場合は STILLO_ENABLE_JINA=1
 stillo dump https://your-spa-app.example.com
 ```
 
@@ -125,12 +125,14 @@ stillo dump https://your-spa-app.example.com
 
 | 優先度 | プロバイダー | 環境変数 |
 |--------|-------------|----------|
-| 1 | Anthropic | `ANTHROPIC_API_KEY`（モデル: `ANTHROPIC_MODEL`、デフォルト `claude-sonnet-4-5`） |
+| 1 | Anthropic | `ANTHROPIC_API_KEY` または `ANTHROPIC_BASE_URL`（モデル: `ANTHROPIC_MODEL`、デフォルト `claude-sonnet-4-5`）。`ANTHROPIC_BASE_URL` のみの場合は認証をプロキシ側で行う前提で、キーにはダミー値を送る |
 | 2 | OpenAI | `OPENAI_API_KEY`（ベースURL: `OPENAI_BASE_URL`、モデル: `OPENAI_MODEL`、デフォルト `gpt-4o-mini`） |
 | 3 | llama.cpp | `LLAMA_CPP_BASE_URL`（モデル: `LLAMA_CPP_MODEL`、デフォルト `default`、APIキー不要） |
-| 4 | Ollama（ローカル） | `OLLAMA_BASE_URL`（デフォルト `http://localhost:11434/`）、`OLLAMA_MODEL`（デフォルト `llama3`） |
+| 4 | Ollama（ローカル） | `OLLAMA_BASE_URL`（例 `http://localhost:11434/`）、`OLLAMA_MODEL`（デフォルト `llama3`） |
 
-OpenAI互換APIを持つ任意のプロバイダー（LM Studio等）は `OPENAI_BASE_URL` と `OPENAI_API_KEY` で利用できます。
+いずれも設定されていない場合はエラーになります（Ollama への暗黙の接続は行いません）。ベースURLが不正な場合もエラーになります。OpenAI互換APIを持つ任意のプロバイダー（LM Studio等）は `OPENAI_BASE_URL` と `OPENAI_API_KEY` で利用できます。
+
+ページ本文は `<document>` タグで区切ってLLMに渡し、本文中の指示に従わないよう system プロンプトで指定しています。出力が `max_tokens` に達して途中で切れた場合、`qa`・`summarize` は警告付きで部分出力を表示し、`extract` はエラーにします。
 
 ```bash
 # Anthropic でQ&A
@@ -145,6 +147,7 @@ stillo extract "title,author,published_at" https://example.com/article
 stillo extract "title,author" --format json https://example.com/article
 
 # Ollama でローカル実行
+export OLLAMA_BASE_URL=http://localhost:11434/
 stillo qa "記事の要点は？" https://example.com/article
 ```
 
@@ -156,10 +159,14 @@ stillo qa "記事の要点は？" https://example.com/article
 
 | ツール | 説明 |
 |--------|------|
-| `fetch_url` | URLを取得してMarkdown/テキスト/JSONで返す。SPA自動委譲対応 |
-| `read_links` | URLからリンク一覧（テキスト・href）を抽出して返す |
+| `fetch_url` | URLを取得してMarkdown/テキスト/JSONで返す。`max_chars`（既定 50,000 文字）と `offset` でページング |
+| `read_links` | URLからリンク一覧（テキスト・href）を抽出して返す。`limit`（既定 200 件）と `offset` でページング |
 | `search_web` | Web検索して結果を返す（format=markdown\|links）。ボットブロック時はエラーを明示 |
-| `extract_structured` | LLMを使って指定フィールドをJSONで抽出する（LLM APIキーが必要） |
+| `extract_structured` | LLMを使って指定フィールドをJSONで抽出する（[LLM連携](#llm連携)のプロバイダー設定が必要）。JSONとして解釈できない出力・途中で切れた出力はエラー |
+
+MCP経由のページ取得は静的HTTP取得のみで、`dump` コマンドのようなSPA委譲やフレーム展開は行いません。切り詰めた場合は出力に全体長と次の `offset` を明記します。リクエストは並行処理され、`notifications/cancelled` で実行中のツール呼び出しを中断できます。
+
+`fetch_url`・`read_links`・`extract_structured` は取得先URLをLLMが決めるため、loopback・プライベートアドレス（RFC1918）・リンクローカル（169.254.0.0/16 等）・ULA への接続を既定で拒否します。判定はDNS解決後のIPとリダイレクトの各ホップに対して行います。拒否モードでは `HTTP_PROXY` 等のプロキシ設定を使いません。ローカルの開発サーバー等を読ませる場合は `STILLO_ALLOW_PRIVATE_NETWORK=1` を設定してください。URLスキームは http/https のみ受け付けます。CLI（`stillo dump` 等）にはこの制限はありません。
 
 ### Web検索バックエンド
 

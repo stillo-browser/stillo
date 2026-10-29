@@ -3,12 +3,13 @@ mod args;
 use anyhow::{Context, Result};
 use args::{Cli, Command, DelegateTarget, OutputFormat};
 use clap::Parser;
+use std::time::Duration;
 use stillo_core::{
     document::{DelegationTarget, SpaDetection},
     ContentExtractor, ExtractorConfig, MarkdownConfig, MarkdownSerializer,
 };
 use stillo_fetcher::{HttpConfig, HttpFetcher, SpaDelegationChain};
-use stillo_llm::{prompts, CompletionConfig, LlmProvider};
+use stillo_llm::{prompts, CompletionConfig, LlmError, LlmProvider};
 use stillo_mcp::McpServer;
 use stillo_renderer::{TuiBrowser, TuiResult};
 use url::Url;
@@ -389,9 +390,7 @@ async fn qa(
     let doc = fetch_as_markdown(url, timeout, delegate, no_delegate).await?;
     let llm = LlmProvider::from_env().context("LLM provider not configured")?;
     let messages = prompts::qa_prompt(question, &doc);
-    let answer = llm
-        .complete(messages, &CompletionConfig::default())
-        .await
+    let answer = accept_truncated(llm.complete(messages, &CompletionConfig::default()).await)
         .context("LLM request failed")?;
     // LLM の回答はページ内容を含みうるため、制御文字を除去してから出力する
     println!("{}", stillo_core::strip_control_chars(&answer));
@@ -407,9 +406,7 @@ async fn summarize(
     let doc = fetch_as_markdown(url, timeout, delegate, no_delegate).await?;
     let llm = LlmProvider::from_env().context("LLM provider not configured")?;
     let messages = prompts::summarize_prompt(&doc);
-    let summary = llm
-        .complete(messages, &CompletionConfig::default())
-        .await
+    let summary = accept_truncated(llm.complete(messages, &CompletionConfig::default()).await)
         .context("LLM request failed")?;
     println!("{}", stillo_core::strip_control_chars(&summary));
     Ok(())
@@ -425,13 +422,10 @@ async fn extract_fields(
 ) -> Result<()> {
     let doc = fetch_as_markdown(url, timeout, delegate, no_delegate).await?;
     let llm = LlmProvider::from_env().context("LLM provider not configured")?;
-    let config = CompletionConfig {
-        temperature: 0.0,
-        ..Default::default()
-    };
     let messages = prompts::extract_prompt(fields, &doc);
+    // 抽出結果は途中で切れると JSON として壊れるため、qa/summarize と違い Truncated はエラーのまま扱う
     let result = llm
-        .complete(messages, &config)
+        .complete(messages, &CompletionConfig::extraction())
         .await
         .context("LLM request failed")?;
 
@@ -444,6 +438,24 @@ async fn extract_fields(
     }
     println!("{}", stillo_core::strip_control_chars(&result));
     Ok(())
+}
+
+/// max_tokens 到達で打ち切られた自然文の応答を、警告付きで部分出力として受け入れる。
+/// qa/summarize では途中までの文章でも利用価値があり、エラーにすると何も表示されなくなるため
+fn accept_truncated(result: Result<String, LlmError>) -> Result<String, LlmError> {
+    match result {
+        Err(LlmError::Truncated {
+            max_tokens,
+            partial,
+        }) => {
+            eprintln!(
+                "warning: LLM output was truncated at max_tokens={}",
+                max_tokens
+            );
+            Ok(partial)
+        }
+        other => other,
+    }
 }
 
 /// URL を取得して MarkdownDocument に変換する共通ヘルパー
@@ -467,9 +479,11 @@ async fn delegate_or_fallback(
     url: &Url,
     static_raw: stillo_core::document::RawHtml,
     delegate: Option<&DelegateTarget>,
-    _timeout: u64,
+    timeout: u64,
 ) -> Result<stillo_core::document::RawHtml> {
-    let chain = build_delegation_chain(delegate);
+    // 静的取得と同じ --timeout を委譲チェーン全体の期限にする。CDP の読み込み待ち等が
+    // 積み重なって指定時間を大きく超えないようにするため
+    let chain = build_delegation_chain(delegate).with_timeout(Duration::from_secs(timeout));
 
     match chain.fetch_with_js(url).await {
         Ok(delegated) => Ok(delegated),
@@ -490,9 +504,14 @@ fn build_delegation_chain(delegate: Option<&DelegateTarget>) -> SpaDelegationCha
             SpaDelegationChain::with_single_target(DelegationTarget::LocalCdp { port: 9222 })
         }
         Some(DelegateTarget::Playwright) => {
-            SpaDelegationChain::with_single_target(DelegationTarget::PlaywrightDaemon {
-                socket_path: "/tmp/stillo-playwright.sock".into(),
-            })
+            // 明示指定でも所有者を確認できないソケットには接続しない（他ユーザーのなりすまし対策）
+            let target = match stillo_fetcher::spa::playwright::discover_socket() {
+                Some(socket_path) => DelegationTarget::PlaywrightDaemon { socket_path },
+                None => DelegationTarget::Unavailable {
+                    reason: "no Playwright daemon socket owned by the current user".into(),
+                },
+            };
+            SpaDelegationChain::with_single_target(target)
         }
         Some(DelegateTarget::Jina) => {
             SpaDelegationChain::with_single_target(DelegationTarget::JinaReader {

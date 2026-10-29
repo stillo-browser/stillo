@@ -184,6 +184,32 @@ pub fn parse_searxng_results(json_text: &str) -> Option<Vec<SearchResult>> {
     Some(out)
 }
 
+/// SearXNG レスポンスの `unresponsive_engines`（応答しなかったエンジン名）を返す。
+///
+/// 要素は `["google", "timeout"]` のような [エンジン名, 理由] の配列。
+/// 上流エンジンが全滅した場合も SearXNG は `results: []` を返すため、
+/// 「結果0件」とブロック・障害を区別する材料として使う。
+pub fn searxng_unresponsive_engines(json_text: &str) -> Vec<String> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json_text) else {
+        return Vec::new();
+    };
+    v.get("unresponsive_engines")
+        .and_then(|e| e.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| match e {
+                    serde_json::Value::Array(pair) => {
+                        let parts: Vec<&str> = pair.iter().filter_map(|p| p.as_str()).collect();
+                        (!parts.is_empty()).then(|| parts.join(": "))
+                    }
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Brave Search API（/res/v1/web/search）レスポンスをパースする。
 pub fn parse_brave_results(json_text: &str) -> Option<Vec<SearchResult>> {
     let v: serde_json::Value = serde_json::from_str(json_text).ok()?;
@@ -462,6 +488,17 @@ mod tests {
             parse_searxng_results(r#"{"results": []}"#).unwrap().len(),
             0
         );
+    }
+
+    #[test]
+    fn test_searxng_unresponsive_engines() {
+        let json = r#"{"results": [], "unresponsive_engines": [["google", "timeout"], ["bing", "CAPTCHA"]]}"#;
+        assert_eq!(
+            searxng_unresponsive_engines(json),
+            vec!["google: timeout".to_string(), "bing: CAPTCHA".to_string()]
+        );
+        assert!(searxng_unresponsive_engines(r#"{"results": []}"#).is_empty());
+        assert!(searxng_unresponsive_engines("not json").is_empty());
     }
 
     #[test]
