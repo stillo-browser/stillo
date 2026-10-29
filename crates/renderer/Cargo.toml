@@ -11,5 +11,8 @@ description = "ratatui TUI renderer for stillo terminal browser"
 stillo-core = { path = "../core", version = "0.2" }
 ratatui = "0.29"
 crossterm = "0.28"
+# ratatui 0.29 と同じバージョンを使い、表示幅の計算結果を描画側と一致させる
+unicode-width = "0.2.0"
+unicode-segmentation = "1"
 anyhow = { workspace = true }
 url = { workspace = true }
