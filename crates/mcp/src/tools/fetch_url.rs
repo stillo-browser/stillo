@@ -26,7 +26,7 @@ pub async fn run(args: &Value) -> Result<String> {
         }))?,
         _ => {
             let serializer = MarkdownSerializer::new(MarkdownConfig::default());
-            serializer.serialize(&content).content
+            serializer.serialize(&content, chrono::Utc::now()).content
         }
     };
 

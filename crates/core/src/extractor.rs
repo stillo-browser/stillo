@@ -50,9 +50,6 @@ impl ContentExtractor {
         let dom = parse_html(&html_str);
         let root = dom.document.clone();
 
-        let text_len = extract_text_length(&root);
-        let _spa = detect_spa(&root, text_len, self.config.min_content_length);
-
         let extractor = ReadabilityExtractor {
             preserve_links: self.config.preserve_links,
         };
@@ -88,15 +85,23 @@ impl ContentExtractor {
     }
 }
 
-/// HTTP Content-Type ヘッダーと HTML meta charset を参照してエンコードを検出し UTF-8 に変換する。
-/// 判定できない場合は UTF-8 → latin1 の順でフォールバック。
+/// バイト列のエンコードを判定して UTF-8 に変換する。
+///
+/// 優先順は WHATWG Encoding 標準に合わせて BOM → Content-Type の charset → meta charset。
+/// 判定できない場合は UTF-8 として読み、不正なら windows-1252 で読む。
 fn decode_bytes(raw: &RawHtml) -> String {
+    // BOM はサーバー設定より確実にファイル実体を表すため、Content-Type より優先する
+    if let Some((enc, bom_len)) = encoding_rs::Encoding::for_bom(&raw.bytes) {
+        let (cow, _) = enc.decode_without_bom_handling(&raw.bytes[bom_len..]);
+        return cow.into_owned();
+    }
+
     let charset = extract_charset_from_content_type(&raw.content_type)
         .or_else(|| sniff_charset_from_bytes(&raw.bytes));
 
     if let Some(label) = charset {
         if let Some(enc) = encoding_rs::Encoding::for_label(label.as_bytes()) {
-            let (cow, _, _) = enc.decode(&raw.bytes);
+            let (cow, _) = enc.decode_without_bom_handling(&raw.bytes);
             return cow.into_owned();
         }
     }
@@ -105,8 +110,10 @@ fn decode_bytes(raw: &RawHtml) -> String {
         return s.to_owned();
     }
 
-    // latin1 フォールバック（文字化けは甘受する）
-    raw.bytes.iter().map(|&b| b as char).collect()
+    // ブラウザは宣言のない非 UTF-8 文書を windows-1252 として読む。latin1 だと 0x80-0x9F が
+    // 制御文字になり、“” や € などが消える
+    let (cow, _) = encoding_rs::WINDOWS_1252.decode_without_bom_handling(&raw.bytes);
+    cow.into_owned()
 }
 
 /// DOM の最大深さ。これより深い部分木は切り捨てる。
@@ -145,14 +152,15 @@ fn truncate_deep_nodes(root: &markup5ever_rcdom::Handle, max_depth: usize) {
 }
 
 /// "text/html; charset=Shift_JIS" → Some("Shift_JIS")
+/// パラメータ名は RFC 9110 で大文字小文字を区別しないため `Charset=` も受け付ける。
 fn extract_charset_from_content_type(content_type: &str) -> Option<String> {
-    for part in content_type.split(';') {
-        let part = part.trim();
-        if let Some(val) = part.strip_prefix("charset=") {
-            return Some(val.trim_matches('"').to_owned());
-        }
-    }
-    None
+    content_type.split(';').find_map(|part| {
+        let (key, val) = part.split_once('=')?;
+        key.trim()
+            .eq_ignore_ascii_case("charset")
+            .then(|| val.trim().trim_matches('"').to_owned())
+            .filter(|v| !v.is_empty())
+    })
 }
 
 /// HTML バイト列の先頭 4096 バイトをバイト列のまま走査し、
@@ -203,7 +211,8 @@ fn collect_anchor_links(
             drop(attrs_ref);
 
             if let Some(h) = href {
-                if let Ok(url) = base.join(&h) {
+                // javascript: / data: 等は辿れないうえ、MCP 経由で LLM に渡すと危険なので除外する
+                if let Some(url) = base.join(&h).ok().filter(crate::sanitize::is_navigable_url) {
                     let mut text = String::new();
                     readability::collect_text(handle, &mut text);
                     let trimmed = text.trim().to_owned();
@@ -361,7 +370,8 @@ mod tests {
             .collect();
         assert_eq!(hrefs, ["https://example.com/s?a=1&b=2"]);
 
-        let md = crate::markdown::MarkdownSerializer::new(Default::default()).serialize(&content);
+        let md = crate::markdown::MarkdownSerializer::new(Default::default())
+            .serialize(&content, chrono::DateTime::<chrono::Utc>::default());
         assert!(
             md.content.contains("(https://example.com/s?a=1&b=2)"),
             "{}",
@@ -431,5 +441,101 @@ mod tests {
         assert_eq!(links.len(), 2, "hrefs: {hrefs:?}");
         assert_eq!(links[0].text, "First");
         assert_eq!(links[1].href.as_str(), "https://other.example.org/x");
+    }
+
+    #[test]
+    fn test_extract_links_drops_unsafe_schemes() {
+        let html = r#"<html><body>
+            <a href="javascript:alert(1)">js</a>
+            <a href="data:text/html,x">data</a>
+            <a href="vbscript:x">vb</a>
+            <a href="mailto:a@example.com">mail</a>
+            <a href="/ok">ok</a>
+        </body></html>"#;
+        let (_, links) = extract_from(html);
+        let hrefs: Vec<&str> = links.iter().map(|l| l.href.as_str()).collect();
+        assert_eq!(hrefs, ["mailto:a@example.com", "https://example.com/ok"]);
+    }
+
+    fn raw_bytes(bytes: Vec<u8>, content_type: &str) -> RawHtml {
+        RawHtml {
+            bytes,
+            url: Url::parse("https://example.com/").unwrap(),
+            content_type: content_type.to_string(),
+            status: 200,
+        }
+    }
+
+    #[test]
+    fn test_decode_charset_param_is_case_insensitive() {
+        let (sjis, _, _) = encoding_rs::SHIFT_JIS.encode("<p>日本語</p>");
+        let raw = raw_bytes(sjis.into_owned(), "text/html; Charset=Shift_JIS");
+        assert!(decode_bytes(&raw).contains("日本語"));
+        let (sjis, _, _) = encoding_rs::SHIFT_JIS.encode("<p>日本語</p>");
+        let raw = raw_bytes(sjis.into_owned(), "text/html;CHARSET=\"shift_jis\"");
+        assert!(decode_bytes(&raw).contains("日本語"));
+    }
+
+    /// WHATWG Encoding 標準では BOM が Content-Type の charset より優先される
+    #[test]
+    fn test_decode_bom_overrides_content_type() {
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice("<p>日本語</p>".as_bytes());
+        let raw = raw_bytes(bytes, "text/html; charset=Shift_JIS");
+        assert_eq!(decode_bytes(&raw), "<p>日本語</p>");
+
+        let mut bytes = vec![0xFF, 0xFE];
+        for c in "<p>é</p>".encode_utf16() {
+            bytes.extend_from_slice(&c.to_le_bytes());
+        }
+        let raw = raw_bytes(bytes.clone(), "text/html; charset=iso-8859-1");
+        assert_eq!(decode_bytes(&raw), "<p>é</p>");
+        // charset 宣言がなくても BOM で判定する
+        let raw = raw_bytes(bytes, "text/html");
+        assert_eq!(decode_bytes(&raw), "<p>é</p>");
+    }
+
+    /// 宣言なし・UTF-8 として不正なバイト列は latin1 ではなく windows-1252 として読む
+    #[test]
+    fn test_decode_fallback_is_windows_1252() {
+        let raw = raw_bytes(b"<p>\x93quoted\x94 \x80</p>".to_vec(), "text/html");
+        assert_eq!(decode_bytes(&raw), "<p>\u{201C}quoted\u{201D} \u{20AC}</p>");
+    }
+
+    /// readability → html_to_ast / Markdown の経路でブロック間の語が連結しない
+    #[test]
+    fn test_pipeline_keeps_block_and_word_boundaries() {
+        let html = r#"<html><body><article><h1>T</h1>
+            <p><b>foo</b> <i>bar</i></p>
+            <div>alpha</div><div>beta</div>
+            <table><tr><td>c1</td><td>c2</td></tr></table>
+        </article></body></html>"#;
+        let (content, _) = extract_from(html);
+        let doc = crate::html_to_ast::parse_html_to_ast(&content.body_html, &content.url);
+        let text: Vec<String> = doc
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                crate::ast::Block::Paragraph(i) => Some(
+                    i.iter()
+                        .map(|x| match x {
+                            crate::ast::Inline::Text(s)
+                            | crate::ast::Inline::Bold(s)
+                            | crate::ast::Inline::Italic(s) => s.clone(),
+                            _ => String::new(),
+                        })
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, ["foo bar", "alpha", "beta", "c1 | c2"]);
+
+        let md = crate::markdown::MarkdownSerializer::new(Default::default())
+            .serialize(&content, chrono::DateTime::<chrono::Utc>::default());
+        // readability はインライン装飾タグを出力しないため、語の間の空白だけを確認する
+        assert!(md.content.contains("foo bar"), "{}", md.content);
+        assert!(!md.content.contains("alphabeta"), "{}", md.content);
+        assert!(md.content.contains("c1 | c2"), "{}", md.content);
     }
 }
