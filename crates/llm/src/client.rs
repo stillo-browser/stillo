@@ -100,10 +100,9 @@ impl LlmProvider {
         let api_key = var("ANTHROPIC_API_KEY");
 
         if api_key.is_some() || base_url.is_some() {
-            // ANTHROPIC_BASE_URL だけが設定された構成は、認証をプロキシ側で付与する経路を想定している
-            // （6691d4e で導入）。x-api-key ヘッダを省かずダミー値を送る理由はコード・履歴から
-            // 確認できなかったが、既存のプロキシ構成を壊さないよう挙動は維持する。
-            // プロキシ側で無視または置換される前提の値であり、秘密情報ではない
+            // ANTHROPIC_BASE_URL で Anthropic 互換 API のカスタムプロバイダを指定し、API キーを設定しない構成向けのフォールバック。
+            // 認証が不要なプロバイダでも x-api-key フィールド自体は必須のものがあるため、ヘッダを省かずダミー値を送る。
+            // プロバイダ側で無視される前提の値であり、秘密情報ではない
             let key = api_key.unwrap_or_else(|| "proxy-managed".to_owned());
             let model = var("ANTHROPIC_MODEL").unwrap_or_else(|| "claude-sonnet-4-5".to_owned());
             let url = base_url.unwrap_or_else(|| "https://api.anthropic.com".to_owned());
@@ -159,6 +158,24 @@ impl LlmProvider {
             Self::OpenAiCompat(c) => c.complete(messages, config).await,
         }
     }
+}
+
+/// OpenAI 互換 API の chat completions エンドポイントを組み立てる。
+///
+/// `Url::join` は末尾スラッシュのない base URL の最後のセグメントを置き換えるため、
+/// `http://proxy/llm` が `http://proxy/v1/chat/completions` になりパスが落ちる。常にパスを連結する。
+/// OpenAI SDK の慣習（`https://api.openai.com/v1` のように /v1 まで含める）と、
+/// 本ツールの従来の書き方（/v1 を含めない）の両方を受け付けるため、末尾が /v1 なら /v1 を重ねない
+fn chat_completions_endpoint(base: &Url) -> Url {
+    let mut url = base.clone();
+    let path = base.path().trim_end_matches('/');
+    let suffix = if path.ends_with("/v1") {
+        "/chat/completions"
+    } else {
+        "/v1/chat/completions"
+    };
+    url.set_path(&format!("{}{}", path, suffix));
+    url
 }
 
 /// 環境変数で与えられたベース URL を解釈する。エラーに変数名を含めて設定箇所を特定できるようにする
@@ -317,10 +334,7 @@ impl OpenAiCompatClient {
             "messages": msgs,
         });
 
-        let endpoint = self
-            .base_url
-            .join("v1/chat/completions")
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+        let endpoint = chat_completions_endpoint(&self.base_url);
 
         let mut req = self.http.post(endpoint.as_str()).json(&body);
         if let Some(key) = &self.api_key {
@@ -393,6 +407,45 @@ mod tests {
     use std::collections::HashMap;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    #[test]
+    fn chat_completions_endpoint_keeps_base_path() {
+        for (base, expected) in [
+            (
+                "https://api.openai.com/",
+                "https://api.openai.com/v1/chat/completions",
+            ),
+            (
+                "https://api.openai.com",
+                "https://api.openai.com/v1/chat/completions",
+            ),
+            // 末尾スラッシュなしのパスが Url::join で落ちていたケース
+            (
+                "http://proxy.local/llm",
+                "http://proxy.local/llm/v1/chat/completions",
+            ),
+            (
+                "http://proxy.local/llm/",
+                "http://proxy.local/llm/v1/chat/completions",
+            ),
+            // OpenAI SDK の慣習どおり /v1 まで含めた base URL
+            (
+                "https://api.openai.com/v1",
+                "https://api.openai.com/v1/chat/completions",
+            ),
+            (
+                "https://api.groq.com/openai/v1/",
+                "https://api.groq.com/openai/v1/chat/completions",
+            ),
+            (
+                "http://localhost:11434/",
+                "http://localhost:11434/v1/chat/completions",
+            ),
+        ] {
+            let url: Url = base.parse().unwrap();
+            assert_eq!(chat_completions_endpoint(&url).as_str(), expected, "{base}");
+        }
+    }
 
     /// 1 リクエストだけ受けて固定レスポンスを返すローカル HTTP サーバー。
     /// 外部ネットワークに依存せずクライアントの送受信を検証するために使う。
