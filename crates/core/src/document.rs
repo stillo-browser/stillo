@@ -130,14 +130,30 @@ pub enum FetchResult {
 pub enum FetchError {
     #[error("HTTP error: {status} {url}")]
     Http { status: u16, url: Url },
-    #[error("TLS error: {0}")]
-    Tls(String),
+    /// DNS 解決失敗・接続拒否・TLS ハンドシェイク失敗など、レスポンスを受け取る前の接続段階の失敗
+    #[error("Connection failed: {0}")]
+    Connect(String),
+    #[error("Redirect error: {0}")]
+    Redirect(String),
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(String),
+    /// 接続後の送受信やボディ読み取りの失敗など、上記に分類できないもの
+    #[error("Request failed: {0}")]
+    Request(String),
     #[error("Timeout after {seconds}s")]
     Timeout { seconds: u64 },
+    /// プライベートネットワーク拒否設定により、接続先 IP やスキームを拒否した
+    #[error("Blocked: {url}: {reason}")]
+    Blocked { url: Url, reason: String },
+    #[error("Response body exceeds limit of {limit} bytes")]
+    BodyTooLarge { limit: usize },
     #[error("Delegation failed: {0}")]
     DelegationFailed(String),
     #[error("All delegation targets unavailable")]
     NoDelegationAvailable,
+    /// 委譲チェーンの全ターゲットが失敗した。各要素は「ターゲット名: 失敗理由」
+    #[error("All delegation targets failed: {}", .0.join("; "))]
+    DelegationChainFailed(Vec<String>),
 }
 
 #[cfg(test)]
