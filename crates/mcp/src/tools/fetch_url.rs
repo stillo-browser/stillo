@@ -51,7 +51,8 @@ fn render(
         "plain" => Ok(paginate_text(&content.body_text, offset, max_chars)?),
         _ => {
             let serializer = MarkdownSerializer::new(MarkdownConfig::default());
-            let markdown = serializer.serialize(content).content;
+            // 取得時刻はこの I/O 境界で注入する（core の serialize は純粋関数で時計を読まない）
+            let markdown = serializer.serialize(content, chrono::Utc::now()).content;
             Ok(paginate_text(&markdown, offset, max_chars)?)
         }
     }

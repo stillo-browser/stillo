@@ -1631,6 +1631,7 @@ name = "stillo"
 version = "0.2.1"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "serde_json",
  "stillo-core",
@@ -1697,6 +1698,7 @@ name = "stillo-mcp"
 version = "0.2.1"
 dependencies = [
  "anyhow",
+ "chrono",
  "serde",
  "serde_json",
  "stillo-core",

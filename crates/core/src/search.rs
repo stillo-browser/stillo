@@ -43,16 +43,44 @@ pub fn detect_blocked_page(status: u16, html: &str) -> bool {
     false
 }
 
+/// DDG の HTML をパースできなかったことを表すエラー。
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum DdgParseError {
+    /// 結果ブロック（class に `result` を含む要素）はあるのに 1 件も取り出せなかった。
+    /// DDG のマークアップ変更でパーサーが追随できていない可能性が高く、「0 件」とは区別する
+    #[error("DuckDuckGo の結果ブロック {blocks} 件から検索結果を取り出せなかった（HTML 構造の変更の可能性）")]
+    UnrecognizedResults { blocks: usize },
+}
+
 /// DuckDuckGo HTML エンドポイント（html.duckduckgo.com/html/）の結果をパースする。
+///
+/// パースできなかった場合も空 Vec を返す。「0 件」とパース失敗を区別したい場合は
+/// [`parse_ddg_results_checked`] を使う。
+pub fn parse_ddg_results(html: &str) -> Vec<SearchResult> {
+    parse_ddg_results_checked(html).unwrap_or_default()
+}
+
+/// DuckDuckGo HTML エンドポイントの結果をパースし、パース失敗を「0 件」と区別して返す。
 ///
 /// result__a / result__url / result__snippet の各 `<a>` を uddg= キーで
 /// グループ化し、リダイレクトを解決した実URL付きの構造化データを返す。
-pub fn parse_ddg_results(html: &str) -> Vec<SearchResult> {
+/// 結果ブロックがあるのに 1 件も取り出せない場合は [`DdgParseError::UnrecognizedResults`]。
+pub fn parse_ddg_results_checked(html: &str) -> Result<Vec<SearchResult>, DdgParseError> {
     let dom = crate::extractor::parse_html(html);
+    let results = group_ddg_results(&dom.document);
+    if results.is_empty() {
+        let blocks = count_result_blocks(&dom.document);
+        if blocks > 0 {
+            return Err(DdgParseError::UnrecognizedResults { blocks });
+        }
+    }
+    Ok(results)
+}
 
+fn group_ddg_results(root: &Handle) -> Vec<SearchResult> {
     // (class, href, text) の形式で全対象リンクを収集
     let mut raw: Vec<(String, String, String)> = Vec::new();
-    collect_result_links(&dom.document, &mut raw);
+    collect_result_links(root, &mut raw);
 
     // DDGリダイレクトURLの uddg= パラメータをキーにグループ化。
     // order は挿入順を保持するためのキーリスト。
@@ -241,21 +269,45 @@ pub fn resolve_ddg_redirect(url: Url) -> Url {
         .unwrap_or(url)
 }
 
+/// 要素の class 属性をスペース区切りのトークンで返す
+fn class_tokens(handle: &Handle) -> Vec<String> {
+    match &handle.data {
+        NodeData::Element { attrs, .. } => attrs
+            .borrow()
+            .iter()
+            .find(|a| a.name.local.as_ref() == "class")
+            .map(|a| a.value.split_whitespace().map(str::to_owned).collect())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// class トークンに `result` / `web-result` を持つ要素（DDG の結果 1 件分の枠）の数
+fn count_result_blocks(handle: &Handle) -> usize {
+    let own = class_tokens(handle)
+        .iter()
+        .any(|t| t == "result" || t == "web-result") as usize;
+    own + handle
+        .children
+        .borrow()
+        .iter()
+        .map(count_result_blocks)
+        .sum::<usize>()
+}
+
 /// DOM を再帰走査して result__a / result__url / result__snippet の <a> を収集する。
+///
+/// class 属性全体の完全一致で照合すると、DDG がトークンを 1 つ追加しただけで
+/// 全件取りこぼすため、スペース区切りのトークン単位で照合する。
 fn collect_result_links(handle: &Handle, out: &mut Vec<(String, String, String)>) {
     if let NodeData::Element { name, attrs, .. } = &handle.data {
         if name.local.as_ref() == "a" {
+            let class = class_tokens(handle)
+                .into_iter()
+                .find(|t| matches!(t.as_str(), "result__a" | "result__url" | "result__snippet"));
             let attrs_ref = attrs.borrow();
-            let class = attrs_ref
-                .iter()
-                .find(|a| a.name.local.as_ref() == "class")
-                .map(|a| a.value.as_ref().to_owned())
-                .unwrap_or_default();
 
-            if matches!(
-                class.as_str(),
-                "result__a" | "result__url" | "result__snippet"
-            ) {
+            if let Some(class) = class {
                 let href = attrs_ref
                     .iter()
                     .find(|a| a.name.local.as_ref() == "href")
@@ -329,6 +381,45 @@ mod tests {
         assert_eq!(results[0].url.as_str(), "https://example.com/");
         assert_eq!(results[0].snippet, "An illustrative domain");
         assert_eq!(results[1].url.as_str(), "https://www.rust-lang.org/");
+    }
+
+    /// DDG が class にトークンを追加しても結果を取りこぼさない
+    #[test]
+    fn test_parse_ddg_results_with_extra_class_tokens() {
+        let html = ddg_html(&[("Example Domain", "https://example.com/", "snippet")])
+            .replace(
+                "class=\"result__a\"",
+                "class=\"result__a js-result-title-link\"",
+            )
+            .replace(
+                "class=\"result__snippet\"",
+                "class=\"result__snippet  new\"",
+            );
+        let results = parse_ddg_results(&html);
+        assert_eq!(results.len(), 1, "{html}");
+        assert_eq!(results[0].title, "Example Domain");
+        assert_eq!(results[0].snippet, "snippet");
+    }
+
+    /// 結果ブロックがあるのに 1 件も取れない場合はパース失敗として「0 件」と区別する
+    #[test]
+    fn test_parse_ddg_results_checked_distinguishes_parse_failure() {
+        let changed = ddg_html(&[("Example", "https://example.com/", "s")])
+            .replace("result__a", "result-title")
+            .replace("result__url", "result-url")
+            .replace("result__snippet", "result-snippet");
+        assert_eq!(
+            parse_ddg_results_checked(&changed),
+            Err(DdgParseError::UnrecognizedResults { blocks: 1 })
+        );
+        assert!(parse_ddg_results(&changed).is_empty());
+
+        // 結果ブロック自体がない「0 件」ページは正常な空結果
+        let no_results = r#"<html><body><div class="no-results">No results.</div></body></html>"#;
+        assert_eq!(parse_ddg_results_checked(no_results), Ok(vec![]));
+
+        let ok = ddg_html(&[("Example", "https://example.com/", "s")]);
+        assert_eq!(parse_ddg_results_checked(&ok).unwrap().len(), 1);
     }
 
     #[test]

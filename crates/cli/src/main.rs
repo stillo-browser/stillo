@@ -254,7 +254,7 @@ fn raw_to_browse_page(
     let content = extractor.extract(&raw)?;
     let doc = stillo_core::parse_html_to_ast(&content.body_html, &content.url);
     let serializer = MarkdownSerializer::new(MarkdownConfig::default());
-    let md_doc = serializer.serialize(&content);
+    let md_doc = serializer.serialize(&content, chrono::Utc::now());
     Ok(stillo_core::BrowsePage {
         title: content.title,
         url: content.url,
@@ -533,7 +533,7 @@ async fn fetch_as_markdown(
         .extract(&raw)
         .context("failed to extract content")?;
     let serializer = MarkdownSerializer::new(MarkdownConfig::default());
-    Ok(serializer.serialize(&content))
+    Ok(serializer.serialize(&content, chrono::Utc::now()))
 }
 
 /// SPA委譲を試み、全ターゲット失敗時は静的HTMLにフォールバックする

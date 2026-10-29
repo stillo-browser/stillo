@@ -24,7 +24,7 @@ pub async fn run(args: &Value) -> Result<String> {
     let raw = fetcher.fetch(&url).await?;
     let content = extractor.extract(&raw)?;
     let serializer = MarkdownSerializer::new(MarkdownConfig::default());
-    let doc = serializer.serialize(&content);
+    let doc = serializer.serialize(&content, chrono::Utc::now());
 
     let messages = prompts::extract_prompt(&fields, &doc);
     let result = match llm
