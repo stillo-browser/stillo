@@ -16,7 +16,7 @@ use url::Url;
 
 use stillo_core::search::{
     detect_blocked_page, parse_brave_results, parse_ddg_results, parse_searxng_results,
-    render_results_markdown, SearchResult,
+    render_results_markdown, searxng_unresponsive_engines, SearchResult,
 };
 
 use crate::{HttpConfig, HttpFetcher};
@@ -194,8 +194,20 @@ async fn search_with(
                     raw.status
                 )));
             }
-            parse_searxng_results(&text)
-                .ok_or_else(|| SearchError::Http("invalid SearXNG JSON response".into()))
+            let results = parse_searxng_results(&text)
+                .ok_or_else(|| SearchError::Http("invalid SearXNG JSON response".into()))?;
+            // 上流エンジンが全て落ちた（CAPTCHA・タイムアウト等）場合も results は空で返る。
+            // 「0件」と誤認せず次のバックエンドへフォールバックさせる
+            if results.is_empty() {
+                let unresponsive = searxng_unresponsive_engines(&text);
+                if !unresponsive.is_empty() {
+                    return Err(SearchError::Http(format!(
+                        "no results; unresponsive engines: {}",
+                        unresponsive.join(", ")
+                    )));
+                }
+            }
+            Ok(results)
         }
         SearchBackend::Brave { api_key } => {
             let mut url = Url::parse("https://api.search.brave.com/res/v1/web/search")
@@ -230,4 +242,50 @@ pub fn results_to_markdown(query: &str, results: &[SearchResult]) -> String {
 #[allow(dead_code)]
 fn short_timeout() -> Duration {
     Duration::from_secs(5)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn mock_searxng(body: &'static str) -> Url {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf).await;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            s.write_all(resp.as_bytes()).await.ok();
+        });
+        Url::parse(&format!("http://127.0.0.1:{}/", port)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn searxng_empty_results_with_unresponsive_engines_is_error() {
+        let base_url =
+            mock_searxng(r#"{"results": [], "unresponsive_engines": [["google", "CAPTCHA"]]}"#)
+                .await;
+        let fetcher = HttpFetcher::new(HttpConfig::default());
+        let err = search_with(&fetcher, &SearchBackend::Searxng { base_url }, "rust")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("google"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn searxng_empty_results_without_unresponsive_engines_is_ok() {
+        let base_url = mock_searxng(r#"{"results": [], "unresponsive_engines": []}"#).await;
+        let fetcher = HttpFetcher::new(HttpConfig::default());
+        let results = search_with(&fetcher, &SearchBackend::Searxng { base_url }, "rust")
+            .await
+            .unwrap();
+        assert!(results.is_empty());
+    }
 }
