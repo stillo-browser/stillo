@@ -1,3 +1,4 @@
+use crate::text::truncate_to_width;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -9,7 +10,7 @@ use ratatui::{
 /// 上部ステータスバー: "stillo | <title> | <url>  XX%"
 pub fn render_status_bar(f: &mut Frame, area: Rect, title: &str, url: &str, scroll_pct: usize) {
     let pct_label = format!(" {}% ", scroll_pct);
-    let pct_width = pct_label.len() as u16;
+    let pct_width = crate::text::display_width(&pct_label) as u16;
 
     // 固定幅の部品: " stillo " (8) + " │ " (3) + " │ " (3) = 14
     let fixed = 14u16;
@@ -27,22 +28,16 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, title: &str, url: &str, scro
         ),
         Span::raw(" │ "),
         Span::styled(
-            truncate(title, title_max),
+            truncate_to_width(title, title_max),
             Style::default().add_modifier(Modifier::BOLD),
         ),
         Span::raw(" │ "),
-        Span::styled(truncate(url, url_max), Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            truncate_to_width(url, url_max),
+            Style::default().fg(Color::DarkGray),
+        ),
         Span::styled(pct_label, Style::default().fg(Color::Yellow)),
     ]);
     let bar = Paragraph::new(text).style(Style::default().bg(Color::DarkGray));
     f.render_widget(bar, area);
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if max == 0 || s.chars().count() <= max {
-        s.to_owned()
-    } else {
-        let truncated: String = s.chars().take(max.saturating_sub(1)).collect();
-        format!("{}…", truncated)
-    }
 }

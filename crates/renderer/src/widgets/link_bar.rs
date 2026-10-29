@@ -1,3 +1,4 @@
+use crate::text::{display_width, tail_to_width, truncate_to_width};
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -19,7 +20,7 @@ pub fn render_hint_bar(
     // リンク選択中はそのURLをヒントバーに表示する
     if let Some(url) = selected_link_url {
         let max_len = area.width.saturating_sub(4) as usize;
-        let truncated = truncate_url(url, max_len);
+        let truncated = truncate_to_width(url, max_len);
         let line = Line::from(vec![
             Span::styled(
                 " → ",
@@ -91,6 +92,9 @@ pub fn render_hint_bar(
 
 /// 下部バー（入力モード）
 pub fn render_input_bar(f: &mut Frame, area: Rect, prompt: &str, input: &str) {
+    // 入力が長いとカーソル（末尾）が画面外に出るため、末尾側を残して表示する
+    let avail = (area.width as usize).saturating_sub(display_width(prompt) + 1);
+    let input = tail_to_width(input, avail);
     let line = Line::from(vec![
         Span::styled(
             prompt,
@@ -103,13 +107,4 @@ pub fn render_input_bar(f: &mut Frame, area: Rect, prompt: &str, input: &str) {
     ]);
     let bar = Paragraph::new(line).style(Style::default().bg(Color::DarkGray));
     f.render_widget(bar, area);
-}
-
-fn truncate_url(s: &str, max: usize) -> String {
-    if max == 0 || s.chars().count() <= max {
-        s.to_owned()
-    } else {
-        let truncated: String = s.chars().take(max.saturating_sub(1)).collect();
-        format!("{}…", truncated)
-    }
 }

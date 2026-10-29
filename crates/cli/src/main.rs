@@ -10,7 +10,7 @@ use stillo_core::{
 use stillo_fetcher::{HttpConfig, HttpFetcher, SpaDelegationChain};
 use stillo_llm::{prompts, CompletionConfig, LlmProvider};
 use stillo_mcp::McpServer;
-use stillo_renderer::{TuiBrowser, TuiResult};
+use stillo_renderer::{TuiBrowser, TuiResult, TuiSession};
 use url::Url;
 
 #[tokio::main]
@@ -104,36 +104,101 @@ async fn browse_page(
     no_delegate: bool,
 ) -> Result<()> {
     let mut browser = TuiBrowser::new(page);
+    // 遷移のたびに alternate screen を抜けるとフェッチ中に元のシェル画面のまま固まって見えるため、
+    // 端末セッションはブラウズ全体で 1 つ保持し、フェッチ中も TUI 上に読み込み中表示を出す
+    let mut session = TuiSession::start()?;
 
-    loop {
-        match browser.run()? {
+    let dump = loop {
+        match browser.run(&mut session)? {
             // 遷移・リロード・検索の失敗で TUI ごと終了すると閲覧中のページと履歴を失うため、
             // エラーはヒントバーに表示してブラウズを続行する
             TuiResult::Navigate(next_url) => {
-                match fetch_browse_page(&next_url, timeout, delegate, no_delegate).await {
-                    Ok(page) => browser.load_page(page),
-                    Err(e) => browser.show_error(format!("{}: {:#}", next_url, e)),
+                let fetch = fetch_browse_page(&next_url, timeout, delegate, no_delegate);
+                match load_cancellable(&mut browser, &mut session, &next_url, fetch).await? {
+                    Some(Ok(page)) => browser.load_page(page),
+                    Some(Err(e)) => browser.show_error(format!("{}: {:#}", next_url, e)),
+                    None => browser.show_error(format!("cancelled: {}", next_url)),
                 }
             }
             TuiResult::Reload => {
                 let reload_url = browser.current_url().clone();
-                match fetch_browse_page(&reload_url, timeout, delegate, no_delegate).await {
-                    Ok(page) => browser.reload_page(page),
-                    Err(e) => browser.show_error(format!("reload failed: {:#}", e)),
+                // 検索結果ページは stillo:// スキームで HTTP 取得できないため、同じクエリで再検索する
+                let result = match search_query_from_url(&reload_url) {
+                    Some(query) => {
+                        let search = run_web_search(&query);
+                        load_cancellable(&mut browser, &mut session, &reload_url, search).await?
+                    }
+                    None => {
+                        let fetch = fetch_browse_page(&reload_url, timeout, delegate, no_delegate);
+                        load_cancellable(&mut browser, &mut session, &reload_url, fetch).await?
+                    }
+                };
+                match result {
+                    Some(Ok(page)) => browser.reload_page(page),
+                    Some(Err(e)) => browser.show_error(format!("reload failed: {:#}", e)),
+                    None => browser.show_error(format!("cancelled: {}", reload_url)),
                 }
             }
-            TuiResult::WebSearch(query) => match run_web_search(&query).await {
-                Ok(page) => browser.load_page(page),
-                Err(e) => browser.show_error(format!("search failed: {:#}", e)),
-            },
-            TuiResult::Dump => {
-                print!("{}", browser.markdown());
-                break;
+            TuiResult::WebSearch(query) => {
+                let search = run_web_search(&query);
+                match load_cancellable(&mut browser, &mut session, &query, search).await? {
+                    Some(Ok(page)) => browser.load_page(page),
+                    Some(Err(e)) => browser.show_error(format!("search failed: {:#}", e)),
+                    None => browser.show_error(format!("cancelled: {}", query)),
+                }
             }
-            TuiResult::Quit => break,
+            TuiResult::Dump => break true,
+            TuiResult::Quit => break false,
         }
+    };
+    // Markdown は元の画面（またはリダイレクト先）に出すため、alternate screen を抜けてから書く
+    session.end();
+    if dump {
+        print!("{}", browser.markdown());
     }
     Ok(())
+}
+
+/// 読み込み中表示を出したまま `fut` を待つ。Esc / Ctrl-C でキャンセルされたら None を返す。
+/// キー入力はブロッキング読み取りできないため、一定間隔で非ブロッキングにポーリングする。
+/// キャンセル時は Future を drop してフェッチを中断する。
+async fn load_cancellable<T>(
+    browser: &mut TuiBrowser,
+    session: &mut TuiSession,
+    target: impl std::fmt::Display,
+    fut: impl std::future::Future<Output = T>,
+) -> Result<Option<T>> {
+    browser.show_loading(session, format!("Loading {}...", target))?;
+    tokio::pin!(fut);
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(50));
+    loop {
+        tokio::select! {
+            out = &mut fut => return Ok(Some(out)),
+            _ = tick.tick() => {
+                if browser.poll_cancel(session)? {
+                    return Ok(None);
+                }
+            }
+        }
+    }
+}
+
+/// Web検索結果ページの URL。リロード時に search_query_from_url でクエリを取り出せる形にする。
+fn search_page_url(query: &str) -> Result<Url> {
+    Ok(Url::parse(&format!(
+        "stillo://search?q={}",
+        url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>()
+    ))?)
+}
+
+/// `stillo://search?q=...` から検索クエリを取り出す。検索結果ページ以外は None。
+fn search_query_from_url(url: &Url) -> Option<String> {
+    if url.scheme() != "stillo" || url.host_str() != Some("search") {
+        return None;
+    }
+    url.query_pairs()
+        .find(|(k, _)| k == "q")
+        .map(|(_, v)| v.into_owned())
 }
 
 /// URL を取得して BrowsePage に変換する。TUI のナビゲーションループ用。
@@ -154,10 +219,7 @@ async fn run_web_search(query: &str) -> Result<stillo_core::BrowsePage> {
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let md = stillo_fetcher::results_to_markdown(query, &results);
-    let url = Url::parse(&format!(
-        "stillo://search?q={}",
-        url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>()
-    ))?;
+    let url = search_page_url(query)?;
     Ok(stillo_core::parse_markdown_to_ast(&md, &url))
 }
 
@@ -510,5 +572,27 @@ fn build_delegation_chain(delegate: Option<&DelegateTarget>) -> SpaDelegationCha
                 api_key,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 検索結果ページの URL からクエリを復元でき、リロードで再検索できること
+    #[test]
+    fn search_query_roundtrips_through_search_page_url() {
+        for q in ["rust tui", "日本語 検索", "a+b&c=d/e?"] {
+            let url = search_page_url(q).unwrap();
+            assert_eq!(search_query_from_url(&url).as_deref(), Some(q));
+        }
+    }
+
+    #[test]
+    fn non_search_urls_have_no_query() {
+        let http = Url::parse("https://example.com/search?q=x").unwrap();
+        assert_eq!(search_query_from_url(&http), None);
+        let other = Url::parse("stillo://other?q=x").unwrap();
+        assert_eq!(search_query_from_url(&other), None);
     }
 }
