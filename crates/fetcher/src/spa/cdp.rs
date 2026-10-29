@@ -42,29 +42,16 @@ pub async fn fetch_via_cdp(port: u16, url: &Url) -> Result<RawHtml, FetchError> 
         FetchError::DelegationFailed(format!("CDP WebSocket connect failed: {}", e))
     })?;
 
-    // helper: CDP コマンドを送信
-    let send_cmd = |ws: &mut _, id: u64, method: &str, params: Value| {
-        let msg = serde_json::json!({
-            "id": id,
-            "method": method,
-            "params": params,
-        })
-        .to_string();
-        // 非同期クロージャにするためここでは文字列を返す
-        msg
-    };
-
     // 3. Page ドメインを有効化
     ws.send(Message::Text(
-        send_cmd(&mut ws, 1, "Page.enable", serde_json::json!({})).into(),
+        cdp_command(1, "Page.enable", serde_json::json!({})).into(),
     ))
     .await
     .map_err(|e| FetchError::DelegationFailed(format!("CDP Page.enable failed: {}", e)))?;
 
     // 4. ナビゲーション
     ws.send(Message::Text(
-        send_cmd(
-            &mut ws,
+        cdp_command(
             2,
             "Page.navigate",
             serde_json::json!({ "url": url.as_str() }),
@@ -99,8 +86,7 @@ pub async fn fetch_via_cdp(port: u16, url: &Url) -> Result<RawHtml, FetchError> 
 
     // 6. HTML を取得
     ws.send(Message::Text(
-        send_cmd(
-            &mut ws,
+        cdp_command(
             3,
             "Runtime.evaluate",
             serde_json::json!({
@@ -149,6 +135,17 @@ pub async fn fetch_via_cdp(port: u16, url: &Url) -> Result<RawHtml, FetchError> 
         content_type: "text/html; charset=utf-8".to_owned(),
         status: 200,
     })
+}
+
+/// CDP コマンドの JSON-RPC メッセージ文字列を組み立てる
+#[cfg(feature = "cdp")]
+fn cdp_command(id: u64, method: &str, params: serde_json::Value) -> String {
+    serde_json::json!({
+        "id": id,
+        "method": method,
+        "params": params,
+    })
+    .to_string()
 }
 
 /// CDP feature が無効な場合は常にエラーを返す

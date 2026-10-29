@@ -2,6 +2,13 @@ use reqwest::Client;
 use serde::Deserialize;
 use url::Url;
 
+/// LLM API 呼び出し全体の上限。
+/// MCP サーバーはリクエストを直列処理するため、無期限に待つと応答しない LLM 1 件でサーバー全体が停止する。
+/// max_tokens 分の生成が完了する程度の余裕を持たせた値にしている
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+/// Ollama 等のローカルエンドポイントが起動していない場合に早く失敗させるための接続上限
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
     #[error("API error ({status}): {message}")]
@@ -139,6 +146,8 @@ impl AnthropicClient {
             model,
             base_url,
             http: Client::builder()
+                .timeout(REQUEST_TIMEOUT)
+                .connect_timeout(CONNECT_TIMEOUT)
                 .build()
                 .expect("failed to build HTTP client"),
         }
@@ -233,6 +242,8 @@ impl OpenAiCompatClient {
             api_key,
             model,
             http: Client::builder()
+                .timeout(REQUEST_TIMEOUT)
+                .connect_timeout(CONNECT_TIMEOUT)
                 .use_rustls_tls()
                 .build()
                 .expect("failed to build HTTP client"),

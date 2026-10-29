@@ -9,7 +9,7 @@ description = "HTTP client and SPA delegation chain for stillo terminal browser"
 
 [features]
 # Chrome DevTools Protocol 委譲を有効化（Chromeが必要）
-cdp = ["dep:tokio-tungstenite"]
+cdp = ["dep:tokio-tungstenite", "dep:futures-util"]
 default = []
 
 [dev-dependencies]
@@ -26,3 +26,4 @@ serde_json = { workspace = true }
 reqwest = { version = "0.12", features = ["rustls-tls", "cookies", "json"], default-features = false }
 # CDP 委譲用 WebSocket クライアント（cdp feature 有効時のみ）
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"], optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["sink"], optional = true }

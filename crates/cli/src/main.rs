@@ -107,24 +107,25 @@ async fn browse_page(
 
     loop {
         match browser.run()? {
+            // 遷移・リロード・検索の失敗で TUI ごと終了すると閲覧中のページと履歴を失うため、
+            // エラーはヒントバーに表示してブラウズを続行する
             TuiResult::Navigate(next_url) => {
-                let raw = fetch_raw(&next_url, timeout, delegate, no_delegate).await?;
-                let page = raw_to_browse_page(raw).map_err(|e| anyhow::anyhow!("{}", e))?;
-                browser.load_page(page);
+                match fetch_browse_page(&next_url, timeout, delegate, no_delegate).await {
+                    Ok(page) => browser.load_page(page),
+                    Err(e) => browser.show_error(format!("{}: {:#}", next_url, e)),
+                }
             }
             TuiResult::Reload => {
                 let reload_url = browser.current_url().clone();
-                let raw = fetch_raw(&reload_url, timeout, delegate, no_delegate).await?;
-                let page = raw_to_browse_page(raw).map_err(|e| anyhow::anyhow!("{}", e))?;
-                browser.reload_page(page);
-            }
-            TuiResult::WebSearch(query) => {
-                // 検索バックエンドの全滅は TUI を殺さずに報知して続行する
-                match run_web_search(&query).await {
-                    Ok(page) => browser.load_page(page),
-                    Err(e) => eprintln!("search failed: {}", e),
+                match fetch_browse_page(&reload_url, timeout, delegate, no_delegate).await {
+                    Ok(page) => browser.reload_page(page),
+                    Err(e) => browser.show_error(format!("reload failed: {:#}", e)),
                 }
             }
+            TuiResult::WebSearch(query) => match run_web_search(&query).await {
+                Ok(page) => browser.load_page(page),
+                Err(e) => browser.show_error(format!("search failed: {:#}", e)),
+            },
             TuiResult::Dump => {
                 print!("{}", browser.markdown());
                 break;
@@ -133,6 +134,17 @@ async fn browse_page(
         }
     }
     Ok(())
+}
+
+/// URL を取得して BrowsePage に変換する。TUI のナビゲーションループ用。
+async fn fetch_browse_page(
+    url: &Url,
+    timeout: u64,
+    delegate: Option<&DelegateTarget>,
+    no_delegate: bool,
+) -> Result<stillo_core::BrowsePage> {
+    let raw = fetch_raw(url, timeout, delegate, no_delegate).await?;
+    raw_to_browse_page(raw).map_err(|e| anyhow::anyhow!("{}", e))
 }
 
 /// Web検索を実行し、結果を BrowsePage に変換する。
@@ -298,7 +310,10 @@ async fn dump(
     no_delegate: bool,
 ) -> Result<()> {
     let raw = fetch_raw(url, timeout, delegate, no_delegate).await?;
-    let page = raw_to_browse_page(raw).with_context(|| "failed to extract content")?;
+    // ページ由来の文字列を stdout に書くため、端末エスケープシーケンスになる制御文字を除去する
+    let page = raw_to_browse_page(raw)
+        .with_context(|| "failed to extract content")?
+        .sanitize_for_terminal();
 
     match format {
         OutputFormat::Markdown => {
@@ -378,7 +393,8 @@ async fn qa(
         .complete(messages, &CompletionConfig::default())
         .await
         .context("LLM request failed")?;
-    println!("{}", answer);
+    // LLM の回答はページ内容を含みうるため、制御文字を除去してから出力する
+    println!("{}", stillo_core::strip_control_chars(&answer));
     Ok(())
 }
 
@@ -395,7 +411,7 @@ async fn summarize(
         .complete(messages, &CompletionConfig::default())
         .await
         .context("LLM request failed")?;
-    println!("{}", summary);
+    println!("{}", stillo_core::strip_control_chars(&summary));
     Ok(())
 }
 
@@ -426,7 +442,7 @@ async fn extract_fields(
             return Ok(());
         }
     }
-    println!("{}", result);
+    println!("{}", stillo_core::strip_control_chars(&result));
     Ok(())
 }
 
