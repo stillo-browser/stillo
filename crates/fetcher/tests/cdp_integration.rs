@@ -110,27 +110,42 @@ async fn start_headless_chrome(
     user_data_dir: &std::path::Path,
     binary: &str,
 ) -> tokio::process::Child {
-    let child = tokio::process::Command::new(binary)
+    let mut child = tokio::process::Command::new(binary)
         .arg("--headless=new")
         .arg(format!("--remote-debugging-port={}", port))
         .arg(format!("--user-data-dir={}", user_data_dir.display()))
         .arg("--no-sandbox")
         .arg("--disable-gpu")
+        // CI コンテナでは /dev/shm が小さく、共有メモリ不足で起動が遅れたり落ちたりするため
+        .arg("--disable-dev-shm-usage")
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
         .kill_on_drop(true)
         .spawn()
         .expect("chrome コマンドの起動に失敗しました");
 
-    for _ in 0..100 {
+    // GitHub Actions のランナーでは初回起動（フォントキャッシュ生成等）に 10 秒以上かかり、
+    // 以前の 10 秒固定の待機ではテストが間欠的に失敗していた。
+    // is_chrome_available 自体が最大 5 秒かかりうるため、試行回数ではなく経過時間で打ち切る
+    let deadline = tokio::time::Instant::now() + CHROME_STARTUP_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
         if stillo_fetcher::spa::cdp::is_chrome_available(port).await {
             return child;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // プロセスが既に終了していれば待っても無駄なので、終了ステータス付きで即座に失敗させる
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!("Chrome が起動直後に終了しました（{}）", status);
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
     panic!(
-        "Chrome が --remote-debugging-port={} でリッスンしませんでした",
-        port
+        "Chrome が {:?} 以内に --remote-debugging-port={} でリッスンしませんでした",
+        CHROME_STARTUP_TIMEOUT, port
     );
 }
+
+/// Chrome の CDP ポートが応答するまでの待機上限
+const CHROME_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn unique_user_data_dir(label: &str) -> PathBuf {
     let pid = std::process::id();

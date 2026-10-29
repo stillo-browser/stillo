@@ -44,5 +44,9 @@ jobs:
         run: cargo clippy -p stillo-fetcher --features cdp --tests -- -D warnings
 
       # ubuntu-latest ランナーには google-chrome が同梱されているため CDP 統合テストも実行できる
+      # 統合テストは 1 テストごとに headless Chrome を起動する。CI ランナーで並列に起動すると
+      # CDP ポートの応答が大きく遅れて間欠的に失敗するため、統合テストだけ直列に実行する
       - name: Test with cdp feature
-        run: cargo test -p stillo-fetcher --features cdp
+        run: |
+          cargo test -p stillo-fetcher --features cdp --lib
+          cargo test -p stillo-fetcher --features cdp --test cdp_integration -- --test-threads=1
