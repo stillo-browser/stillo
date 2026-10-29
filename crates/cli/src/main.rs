@@ -9,7 +9,7 @@ use stillo_core::{
     ContentExtractor, ExtractorConfig, MarkdownConfig, MarkdownSerializer,
 };
 use stillo_fetcher::{HttpConfig, HttpFetcher, SpaDelegationChain};
-use stillo_llm::{prompts, CompletionConfig, LlmProvider};
+use stillo_llm::{prompts, CompletionConfig, LlmError, LlmProvider};
 use stillo_mcp::McpServer;
 use stillo_renderer::{TuiBrowser, TuiResult, TuiSession};
 use url::Url;
@@ -452,9 +452,7 @@ async fn qa(
     let doc = fetch_as_markdown(url, timeout, delegate, no_delegate).await?;
     let llm = LlmProvider::from_env().context("LLM provider not configured")?;
     let messages = prompts::qa_prompt(question, &doc);
-    let answer = llm
-        .complete(messages, &CompletionConfig::default())
-        .await
+    let answer = accept_truncated(llm.complete(messages, &CompletionConfig::default()).await)
         .context("LLM request failed")?;
     // LLM の回答はページ内容を含みうるため、制御文字を除去してから出力する
     println!("{}", stillo_core::strip_control_chars(&answer));
@@ -470,9 +468,7 @@ async fn summarize(
     let doc = fetch_as_markdown(url, timeout, delegate, no_delegate).await?;
     let llm = LlmProvider::from_env().context("LLM provider not configured")?;
     let messages = prompts::summarize_prompt(&doc);
-    let summary = llm
-        .complete(messages, &CompletionConfig::default())
-        .await
+    let summary = accept_truncated(llm.complete(messages, &CompletionConfig::default()).await)
         .context("LLM request failed")?;
     println!("{}", stillo_core::strip_control_chars(&summary));
     Ok(())
@@ -488,13 +484,10 @@ async fn extract_fields(
 ) -> Result<()> {
     let doc = fetch_as_markdown(url, timeout, delegate, no_delegate).await?;
     let llm = LlmProvider::from_env().context("LLM provider not configured")?;
-    let config = CompletionConfig {
-        temperature: 0.0,
-        ..Default::default()
-    };
     let messages = prompts::extract_prompt(fields, &doc);
+    // 抽出結果は途中で切れると JSON として壊れるため、qa/summarize と違い Truncated はエラーのまま扱う
     let result = llm
-        .complete(messages, &config)
+        .complete(messages, &CompletionConfig::extraction())
         .await
         .context("LLM request failed")?;
 
@@ -507,6 +500,24 @@ async fn extract_fields(
     }
     println!("{}", stillo_core::strip_control_chars(&result));
     Ok(())
+}
+
+/// max_tokens 到達で打ち切られた自然文の応答を、警告付きで部分出力として受け入れる。
+/// qa/summarize では途中までの文章でも利用価値があり、エラーにすると何も表示されなくなるため
+fn accept_truncated(result: Result<String, LlmError>) -> Result<String, LlmError> {
+    match result {
+        Err(LlmError::Truncated {
+            max_tokens,
+            partial,
+        }) => {
+            eprintln!(
+                "warning: LLM output was truncated at max_tokens={}",
+                max_tokens
+            );
+            Ok(partial)
+        }
+        other => other,
+    }
 }
 
 /// URL を取得して MarkdownDocument に変換する共通ヘルパー
