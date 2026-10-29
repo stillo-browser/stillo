@@ -38,3 +38,11 @@ jobs:
       # 回帰検出のため warning が出たら失敗させる
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace -- -D warnings
+
+      # cdp feature は既定で無効のため、明示的にビルドしないとコンパイルエラーが検出されない
+      - name: Clippy with cdp feature
+        run: cargo clippy -p stillo-fetcher --features cdp --tests -- -D warnings
+
+      # ubuntu-latest ランナーには google-chrome が同梱されているため CDP 統合テストも実行できる
+      - name: Test with cdp feature
+        run: cargo test -p stillo-fetcher --features cdp

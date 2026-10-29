@@ -4,9 +4,7 @@
 //! ここではレスポンス本体だけを受け取る。ブロックページと「結果0件」を
 //! 区別することで、呼び出し側がブロックを空結果として誤認するのを防ぐ。
 
-use html5ever::parse_document;
-use html5ever::tendril::TendrilSink;
-use markup5ever_rcdom::{Handle, NodeData, RcDom};
+use markup5ever_rcdom::{Handle, NodeData};
 use std::collections::HashMap;
 use url::Url;
 
@@ -50,13 +48,7 @@ pub fn detect_blocked_page(status: u16, html: &str) -> bool {
 /// result__a / result__url / result__snippet の各 `<a>` を uddg= キーで
 /// グループ化し、リダイレクトを解決した実URL付きの構造化データを返す。
 pub fn parse_ddg_results(html: &str) -> Vec<SearchResult> {
-    let dom = match parse_document(RcDom::default(), Default::default())
-        .from_utf8()
-        .read_from(&mut html.as_bytes())
-    {
-        Ok(d) => d,
-        Err(_) => return vec![],
-    };
+    let dom = crate::extractor::parse_html(html);
 
     // (class, href, text) の形式で全対象リンクを収集
     let mut raw: Vec<(String, String, String)> = Vec::new();

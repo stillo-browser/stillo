@@ -76,13 +76,43 @@ pub enum JsFramework {
     Unknown(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// SPA 委譲先。
+///
+/// `Debug` は手書き実装。derive すると `tracing` の `{:?}` 出力で API キーが平文でログに出るため、
+/// キーの値は伏せて有無だけを表示する。
+#[derive(Clone, PartialEq)]
 pub enum DelegationTarget {
     LocalCdp { port: u16 },
     PlaywrightDaemon { socket_path: PathBuf },
     JinaReader { api_key: Option<String> },
     Firecrawl { base_url: Url, api_key: String },
     Unavailable { reason: String },
+}
+
+impl std::fmt::Debug for DelegationTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const REDACTED: &str = "<redacted>";
+        match self {
+            Self::LocalCdp { port } => f.debug_struct("LocalCdp").field("port", port).finish(),
+            Self::PlaywrightDaemon { socket_path } => f
+                .debug_struct("PlaywrightDaemon")
+                .field("socket_path", socket_path)
+                .finish(),
+            Self::JinaReader { api_key } => f
+                .debug_struct("JinaReader")
+                .field("api_key", &api_key.as_ref().map(|_| REDACTED))
+                .finish(),
+            Self::Firecrawl { base_url, .. } => f
+                .debug_struct("Firecrawl")
+                .field("base_url", &base_url.as_str())
+                .field("api_key", &REDACTED)
+                .finish(),
+            Self::Unavailable { reason } => f
+                .debug_struct("Unavailable")
+                .field("reason", reason)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -108,4 +138,26 @@ pub enum FetchError {
     DelegationFailed(String),
     #[error("All delegation targets unavailable")]
     NoDelegationAvailable,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delegation_target_debug_redacts_api_keys() {
+        let jina = DelegationTarget::JinaReader {
+            api_key: Some("jina_secret_value".into()),
+        };
+        let firecrawl = DelegationTarget::Firecrawl {
+            base_url: Url::parse("https://api.firecrawl.dev").unwrap(),
+            api_key: "fc_secret_value".into(),
+        };
+        let jina_dbg = format!("{:?}", jina);
+        let fc_dbg = format!("{:?}", firecrawl);
+        assert!(!jina_dbg.contains("jina_secret_value"), "{jina_dbg}");
+        assert!(!fc_dbg.contains("fc_secret_value"), "{fc_dbg}");
+        assert!(jina_dbg.contains("<redacted>"));
+        assert!(fc_dbg.contains("api.firecrawl.dev"));
+    }
 }

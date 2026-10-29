@@ -57,14 +57,18 @@ impl McpServer {
     }
 
     async fn handle(&self, req: &Value) -> Option<Value> {
-        let id = req.get("id").cloned().unwrap_or(Value::Null);
         let method = req["method"].as_str().unwrap_or("");
 
         tracing::debug!("MCP request: method={}", method);
 
+        // JSON-RPC 2.0 は id を持たない notification への応答を禁止している。
+        // 未知の notification（notifications/cancelled 等）に -32601 を返すと厳密なクライアントがプロトコルエラーにする
+        let id = req.get("id").cloned()?;
+        // クライアントからの response（method を持たず result/error を持つ）にも応答してはならない
+        req.get("method")?;
+
         match method {
             "initialize" => Some(self.handle_initialize(id, req)),
-            "notifications/initialized" => None, // 通知のみ、レスポンス不要
             "tools/list" => Some(self.handle_tools_list(id)),
             "tools/call" => Some(self.handle_tools_call(id, req).await),
             "ping" => Some(ok_response(id, json!({}))),
@@ -207,4 +211,38 @@ fn error_response(id: Value, code: i32, message: &str) -> Value {
         "id": id,
         "error": { "code": code, "message": message }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn notifications_get_no_response() {
+        let server = McpServer::new();
+        for method in [
+            "notifications/initialized",
+            "notifications/cancelled",
+            "unknown/notify",
+        ] {
+            let req = json!({"jsonrpc": "2.0", "method": method});
+            assert!(server.handle(&req).await.is_none(), "{method}");
+        }
+    }
+
+    #[tokio::test]
+    async fn client_responses_get_no_response() {
+        let server = McpServer::new();
+        let req = json!({"jsonrpc": "2.0", "id": 7, "result": {}});
+        assert!(server.handle(&req).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn unknown_request_still_returns_method_not_found() {
+        let server = McpServer::new();
+        let req = json!({"jsonrpc": "2.0", "id": 1, "method": "nope"});
+        let resp = server.handle(&req).await.expect("request needs response");
+        assert_eq!(resp["error"]["code"], -32601);
+        assert_eq!(resp["id"], 1);
+    }
 }

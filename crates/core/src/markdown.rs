@@ -247,20 +247,23 @@ fn extract_attr(attrs: &str, name: &str) -> Option<String> {
         if let Some(start_idx) = attrs.find(&search) {
             let value_start = start_idx + search.len();
             if let Some(end_offset) = attrs[value_start..].find(*quote) {
-                return Some(attrs[value_start..value_start + end_offset].to_owned());
+                // readability が属性値を html_escape して出力するため、ここで対になるデコードをしないと
+                // href の `&` が `&amp;` のまま URL になる
+                return Some(html_decode(&attrs[value_start..value_start + end_offset]));
             }
         }
     }
     None
 }
 
+/// `&amp;` は最後に置換する。先に置換すると `&amp;lt;`（元テキストの文字列 `&lt;`）が `<` まで二重にデコードされる
 fn html_decode(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
+    s.replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
         .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
 }
 
 fn normalize_blank_lines(s: &str) -> String {

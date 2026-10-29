@@ -1665,6 +1665,7 @@ dependencies = [
 name = "stillo-fetcher"
 version = "0.2.1"
 dependencies = [
+ "futures-util",
  "reqwest",
  "serde",
  "serde_json",

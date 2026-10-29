@@ -48,10 +48,14 @@ pub struct TuiBrowser {
     search_cursor: usize,
     history: Vec<(BrowsePage, usize)>,
     forward_history: Vec<(BrowsePage, usize)>,
+    /// ヒントバーに表示するエラー通知。次のキー入力で消える
+    notice: Option<String>,
 }
 
 impl TuiBrowser {
+    /// 受け取ったページは描画前に制御文字を除去する（端末エスケープシーケンスの注入対策）。
     pub fn new(page: BrowsePage) -> Self {
+        let page = page.sanitize_for_terminal();
         let view = ContentView::from_document(&page.doc, &page.links);
         Self {
             page,
@@ -61,11 +65,19 @@ impl TuiBrowser {
             search_cursor: 0,
             history: Vec::new(),
             forward_history: Vec::new(),
+            notice: None,
         }
+    }
+
+    /// 遷移・リロード・検索の失敗を、TUI を終了せずにヒントバーへ表示する。
+    /// 呼び出し側は表示後に再度 run() を呼んでブラウズを続行する。
+    pub fn show_error(&mut self, message: impl std::fmt::Display) {
+        self.notice = Some(stillo_core::sanitize_for_tui(&message.to_string()).replace('\n', " "));
     }
 
     /// 現在ページを履歴に積んで新ページへ遷移する。CLIのナビゲーションループから呼ぶ。
     pub fn load_page(&mut self, page: BrowsePage) {
+        let page = page.sanitize_for_terminal();
         let offset = self.view.scroll_offset;
         let old_page = std::mem::replace(&mut self.page, page);
         self.history.push((old_page, offset));
@@ -78,6 +90,7 @@ impl TuiBrowser {
 
     /// 現在ページを履歴に積まずに置き換える（リロード用）。
     pub fn reload_page(&mut self, page: BrowsePage) {
+        let page = page.sanitize_for_terminal();
         self.view = ContentView::from_document(&page.doc, &page.links);
         self.page = page;
         self.mode = BrowserMode::Normal;
@@ -144,6 +157,7 @@ impl TuiBrowser {
         modifiers: KeyModifiers,
         viewport_height: usize,
     ) -> Option<TuiResult> {
+        self.notice = None;
         match &self.mode {
             BrowserMode::Normal => self.handle_normal(code, modifiers, viewport_height),
             BrowserMode::SearchInput(_) => self.handle_search_input(code),
@@ -427,6 +441,14 @@ impl TuiBrowser {
             .map(|u| u.as_str());
 
         match &self.mode {
+            BrowserMode::Normal if self.notice.is_some() => {
+                let notice = self.notice.as_deref().unwrap_or_default();
+                let bar = Paragraph::new(Line::from(Span::styled(
+                    format!(" ✗ {} ", notice),
+                    Style::default().fg(Color::White).bg(Color::Red),
+                )));
+                f.render_widget(bar, chunks[2]);
+            }
             BrowserMode::Normal | BrowserMode::Help => {
                 render_hint_bar(
                     f,
@@ -533,4 +555,45 @@ fn render_help_popup(f: &mut Frame) {
         .border_style(Style::default().fg(Color::Cyan));
     let para = Paragraph::new(lines).block(block);
     f.render_widget(para, popup);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stillo_core::{Block, Document, Inline};
+
+    fn page_with(s: &str) -> BrowsePage {
+        BrowsePage {
+            title: s.to_owned(),
+            url: Url::parse("https://example.com/").unwrap(),
+            doc: Document {
+                blocks: vec![Block::Paragraph(vec![Inline::Text(s.to_owned())])],
+            },
+            links: vec![],
+            markdown: s.to_owned(),
+        }
+    }
+
+    /// new / load_page / reload_page のどの経路でも制御文字が除去されること
+    #[test]
+    fn all_page_entry_points_strip_control_chars() {
+        let evil = "x\x1b]52;c;SGVsbG8=\x07y";
+        let mut browser = TuiBrowser::new(page_with(evil));
+        assert!(!browser.markdown().contains('\x1b'));
+        browser.load_page(page_with(evil));
+        assert!(!browser.markdown().contains('\x1b'));
+        assert!(!browser.page.title.contains('\x1b'));
+        browser.reload_page(page_with(evil));
+        assert!(!browser.markdown().contains('\x1b'));
+        assert!(!format!("{:?}", browser.page.doc).contains("\\u{1b}"));
+    }
+
+    #[test]
+    fn error_notice_is_sanitized_and_cleared_by_next_key() {
+        let mut browser = TuiBrowser::new(page_with("ok"));
+        browser.show_error("fetch failed:\x1b[2J\nline2");
+        assert_eq!(browser.notice.as_deref(), Some("fetch failed:[2J line2"));
+        browser.handle_key(KeyCode::Char('j'), KeyModifiers::NONE, 10);
+        assert!(browser.notice.is_none());
+    }
 }
