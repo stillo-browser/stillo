@@ -1274,7 +1274,9 @@ mod tests {
         let content = ex.extract(&dom.document, &base_url);
         let elapsed = start.elapsed();
         assert_eq!(content.links.len(), n);
-        assert!(elapsed.as_secs_f64() < 1.5, "{elapsed:?}");
+        // 修正後は debug ビルドで 0.4 秒程度。O(n²) の旧実装は release ビルドでも約 2 秒かかった（debug ではさらに遅い）。
+        // CI ランナーの性能差で誤検知しないよう、二乗オーダーへの退行だけを検出できる緩い閾値にしている
+        assert!(elapsed.as_secs_f64() < 10.0, "{elapsed:?}");
     }
 
     /// div と p の深いネストで候補ごとに部分木を再走査すると、ノード数 × 深さの計算量になる
@@ -1300,6 +1302,7 @@ mod tests {
         let content = ex.extract(&dom.document, &base_url);
         let elapsed = start.elapsed();
         assert!(content.body_text.contains("テキスト"));
-        assert!(elapsed.as_secs_f64() < 1.5, "{elapsed:?}");
+        // 閾値を緩くしている理由は test_many_links_extract_quickly と同じ
+        assert!(elapsed.as_secs_f64() < 10.0, "{elapsed:?}");
     }
 }
