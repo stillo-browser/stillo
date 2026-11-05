@@ -24,6 +24,20 @@
 
 ## Done
 
+- [x] [IMPROVE] 大型ニュースサイトの出力サイズ制限 <!-- 2026-05-16, mitigated 2026-11-05 -->
+  - `https://www.npr.org/sections/news/` で 60KB の出力が返った（通常の 3〜5 倍）
+  - 対策 (A) を実装: CLI `--max-chars`、MCP `fetch_url` の `max_chars` 引数で切り詰め可能。切り詰め時は末尾にマーカー、JSON では `truncated` / `content_chars`
+  - 抽出側の削減（記事リストの間引き）は未着手。必要なら (B) `read_links` → 個別 fetch のフローを推奨
+  - File: `crates/cli/src/main.rs`, `crates/mcp/src/tools/fetch_url.rs`
+
+- [x] [IMPROVE] 一般ユーザー目線レビューで見つかった CLI の使い勝手 <!-- 2026-11-05 -->
+  - `dump --format json` が本文を返さずリンク集だけだった → `content` / `content_chars` / `truncated` を追加（CLI・MCP 共通）
+  - パイプ・リダイレクト時に `browse` / `search` が `os error 6` で即死 → 非TTY時は TUI を開かずテキスト出力（`stillo search foo | less` が動く）
+  - example.com のような短い静的ページが SPA 誤判定され、1.5秒の委譲試行と `Chrome not reachable` 警告が毎回出ていた → JS痕跡（マウント要素・フレームワーク属性・512文字超のインラインスクリプト）が無ければ静的扱い。委譲失敗ログは debug に降格し、全滅時のみ案内1行
+  - LLM 未設定時に `HTTP error: ... localhost:11434` だけが出ていた → 設定方法を示すメッセージで、フェッチ前に終了
+  - `--format plain` が Markdown の見出し記号付きだった → タイトルのみを先頭に置く
+  - File: `crates/cli/src/main.rs`, `crates/core/src/extractor/spa_detection.rs`, `crates/llm/src/client.rs`
+
 - [x] [BUG] search_web がボットブロック時に空結果を返す <!-- 2026-08-11, fixed 2026-08-11 -->
   - DDG が HTTP 202 の anomaly チャレンジページを返すと、パーサーが空配列を返し「検索結果なし」と誤認されていた
   - 修正: `core::search::detect_blocked_page` でステータス(202/403/429)とHTMLマーカーからブロックを検出し、`fetcher::search::web_search` がエラーとして伝播。`SEARXNG_URL`/`BRAVE_API_KEY` のバックエンドフォールバックも追加

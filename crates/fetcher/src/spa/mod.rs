@@ -120,7 +120,9 @@ impl SpaDelegationChain {
                     return Ok(html);
                 }
                 Err(e) => {
-                    tracing::warn!("delegation target {:?} failed: {}", target, e);
+                    // 各ターゲットの失敗は通常の利用でも起こる（Chrome 未起動など）。
+                    // 既定のログレベルでは出さず、全滅時に呼び出し側が案内する
+                    tracing::debug!("delegation target {:?} failed: {}", target, e);
                     failures.push(format!("{}: {}", target_name(target), e));
                 }
             }

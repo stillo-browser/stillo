@@ -14,6 +14,10 @@ pub struct Cli {
     #[arg(long, default_value = "markdown", global = true)]
     pub format: OutputFormat,
 
+    /// 出力の最大文字数（超過分は切り詰める。0 で無効）
+    #[arg(long, global = true)]
+    pub max_chars: Option<usize>,
+
     /// タイムアウト秒数
     #[arg(long, default_value = "30", global = true)]
     pub timeout: u64,
@@ -56,7 +60,7 @@ pub enum Command {
         #[arg(long)]
         format: Option<OutputFormat>,
     },
-    /// DuckDuckGoでWeb検索してTUIブラウザで結果を表示
+    /// Web検索して結果を表示（端末ではTUI、パイプ・リダイレクト時はテキスト出力）
     Search {
         /// 検索クエリ
         query: Vec<String>,
@@ -79,7 +83,7 @@ pub enum DelegateTarget {
     Auto,
     /// Chrome DevTools Protocol（要: Chrome起動済み）
     Cdp,
-    /// Playwright デーモン（Phase 3以降）
+    /// Playwright デーモン（要: /tmp/stillo-playwright.sock）
     Playwright,
     /// Jina Reader API
     Jina,
