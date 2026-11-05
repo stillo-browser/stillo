@@ -74,7 +74,8 @@ impl McpServer {
                             "Fetch a URL with a plain HTTP GET and return its main content as Markdown, plain text, or JSON. \
                              JavaScript is not executed, SPAs are not delegated to a headless browser, and frames are not followed, \
                              so client-rendered pages may come back mostly empty. Output is limited to max_chars characters \
-                             (default {}); when truncated, the output states the total length and the offset to pass to get the next part.",
+                             (default {}); when truncated, the output states the total length and the offset to pass to get the next part. \
+                             Private, loopback and link-local addresses are rejected unless STILLO_ALLOW_PRIVATE_NETWORK=1 is set on the server.",
                             tools::fetch_url::DEFAULT_MAX_CHARS
                         ),
                         "inputSchema": {
@@ -107,7 +108,8 @@ impl McpServer {
                         "description": format!(
                             "Extract links from a URL (whole document, including navigation) with their anchor text. \
                              Returns a JSON object {{total, offset, returned, truncated, next_offset, links}}; \
-                             at most limit links (default {}) are returned per call.",
+                             at most limit links (default {}) are returned per call. \
+                             Private and loopback addresses are rejected unless STILLO_ALLOW_PRIVATE_NETWORK=1 is set on the server.",
                             tools::read_links::DEFAULT_LIMIT
                         ),
                         "inputSchema": {
@@ -134,7 +136,8 @@ impl McpServer {
                         "name": "extract_structured",
                         "description": "Extract specific fields from a page as JSON using an LLM. The page is fetched with a plain HTTP GET (no JavaScript). \
                                         Requires an LLM provider configured on the server via ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, OPENAI_API_KEY, \
-                                        LLAMA_CPP_BASE_URL or OLLAMA_BASE_URL. Returns an error if the LLM output is not valid JSON or was cut off.",
+                                        LLAMA_CPP_BASE_URL or OLLAMA_BASE_URL. Returns an error if the LLM output is not valid JSON or was cut off. \
+                                        Private and loopback addresses are rejected unless STILLO_ALLOW_PRIVATE_NETWORK=1 is set on the server.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -150,7 +153,7 @@ impl McpServer {
                     },
                     {
                         "name": "search_web",
-                        "description": "Search the web via DuckDuckGo and return results with title, URL, and snippet. Use format='links' for structured JSON suitable for follow-up fetch_url calls.",
+                        "description": "Search the web through the configured backend chain (SearXNG when SEARXNG_URL is set, then Brave when BRAVE_API_KEY is set, then DuckDuckGo as the last resort) and return results with title, URL, and snippet. Use format='links' for structured JSON suitable for follow-up fetch_url calls. If every backend is blocked, the call fails with the reason and the env vars that would add a better backend.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {

@@ -8,6 +8,8 @@ use markup5ever_rcdom::{Handle, NodeData};
 use std::collections::HashMap;
 use url::Url;
 
+use crate::sanitize::is_navigable_url;
+
 /// Web検索の1ヒット
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchResult {
@@ -145,7 +147,8 @@ fn group_ddg_results(root: &Handle) -> Vec<SearchResult> {
             let g = groups.remove(&key)?;
             Some(SearchResult {
                 title: g.title?,
-                url: g.real_url?,
+                // javascript: / data: 等はアンカーと同じ扱いで捨てる（結果は LLM へ渡る）
+                url: g.real_url.filter(is_navigable_url)?,
                 snippet: g.snippet.unwrap_or_default(),
                 display_url: g.display_url.unwrap_or_default(),
             })
@@ -166,6 +169,9 @@ pub fn parse_searxng_results(json_text: &str) -> Option<Vec<SearchResult>> {
                 return None;
             }
             let url: Url = r.get("url").and_then(|u| u.as_str())?.parse().ok()?;
+            if !is_navigable_url(&url) {
+                return None;
+            }
             let snippet = r
                 .get("content")
                 .and_then(|c| c.as_str())
@@ -225,6 +231,9 @@ pub fn parse_brave_results(json_text: &str) -> Option<Vec<SearchResult>> {
                 return None;
             }
             let url: Url = r.get("url").and_then(|u| u.as_str())?.parse().ok()?;
+            if !is_navigable_url(&url) {
+                return None;
+            }
             let snippet = r
                 .get("description")
                 .and_then(|c| c.as_str())
@@ -344,6 +353,17 @@ fn collect_text(handle: &Handle, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn searxng_results_with_unsafe_scheme_are_dropped() {
+        let json = r#"{"results":[
+            {"title":"bad","url":"javascript:alert(1)","content":"x"},
+            {"title":"bad2","url":"data:text/html,hi","content":"x"},
+            {"title":"ok","url":"https://example.com/a","content":"y"}]}"#;
+        let results = parse_searxng_results(json).unwrap();
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(results[0].url.as_str(), "https://example.com/a");
+    }
 
     fn ddg_html(results: &[(&str, &str, &str)]) -> String {
         // (title, url, snippet) から DDG 風 HTML を生成するヘルパー

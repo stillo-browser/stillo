@@ -41,64 +41,36 @@ pub async fn run(args: &Value) -> Result<String> {
         Err(e) => return Err(e.into()),
     };
 
-    format_extraction(&result)
+    stillo_llm::normalize_json_output(&result).map_err(Into::into)
 }
 
-/// LLM の抽出結果を JSON として検証し整形する。
-/// パースできない出力を正常結果として返すと、呼び出し側が壊れた JSON を正しい抽出結果と誤認するためエラーにする
-fn format_extraction(output: &str) -> Result<String> {
-    let body = strip_code_fence(output);
-    match serde_json::from_str::<Value>(body) {
-        Ok(v) => Ok(serde_json::to_string_pretty(&v)?),
-        Err(e) => Err(anyhow!(
-            "LLM output is not valid JSON ({}). Raw output:\n{}",
-            e,
-            output
-        )),
-    }
-}
-
-/// "Return JSON only" と指示しても多くのモデルが ```json ... ``` で囲んで返すため、外側の 1 組だけ取り除く
-fn strip_code_fence(s: &str) -> &str {
-    let t = s.trim();
-    let Some(rest) = t.strip_prefix("```") else {
-        return t;
-    };
-    let Some(inner) = rest.strip_suffix("```") else {
-        return t;
-    };
-    // 開始フェンスの言語指定（json 等）は最初の改行までなので読み飛ばす
-    match inner.split_once('\n') {
-        Some((_lang, body)) => body.trim(),
-        None => inner.trim(),
-    }
-}
-
+/// "Return JSON only" と指示しても多くのモデルが ```json ... ``` で囲んで返す。
+/// フェンス除去と JSON 検証は `stillo_llm::normalize_json_output` に集約している
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn valid_json_is_pretty_printed() {
-        let out = format_extraction(r#"{"title":"x"}"#).unwrap();
+        let out = stillo_llm::normalize_json_output(r#"{"title":"x"}"#).unwrap();
         assert_eq!(out, "{\n  \"title\": \"x\"\n}");
     }
 
     #[test]
     fn fenced_json_is_accepted() {
-        let out = format_extraction("```json\n{\"a\": 1}\n```").unwrap();
+        let out = stillo_llm::normalize_json_output("```json\n{\"a\": 1}\n```").unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["a"], 1);
     }
 
     #[test]
     fn non_json_output_is_error() {
-        let err = format_extraction("Sure! The title is x.").unwrap_err();
+        let err = stillo_llm::normalize_json_output("Sure! The title is x.").unwrap_err();
         assert!(err.to_string().contains("not valid JSON"), "{err}");
     }
 
     #[test]
     fn truncated_json_is_error() {
-        assert!(format_extraction(r#"{"title": "x", "auth"#).is_err());
+        assert!(stillo_llm::normalize_json_output(r#"{"title": "x", "auth"#).is_err());
     }
 }

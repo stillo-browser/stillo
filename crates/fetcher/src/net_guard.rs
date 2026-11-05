@@ -34,7 +34,7 @@ pub fn is_blocked_ip(ip: IpAddr) -> bool {
 }
 
 fn is_blocked_ipv4(ip: Ipv4Addr) -> bool {
-    let [a, b, ..] = ip.octets();
+    let [a, b, c, _] = ip.octets();
     ip.is_loopback()
         || ip.is_private()
         || ip.is_link_local()
@@ -44,13 +44,18 @@ fn is_blocked_ipv4(ip: Ipv4Addr) -> bool {
         || a == 0
         // 100.64.0.0/10（CGNAT）。Tailscale 等の社内 VPN がこの帯域を使う
         || (a == 100 && (b & 0xC0) == 64)
+        // 192.0.0.0/24（IETF プロトコル割当）
+        || (a == 192 && b == 0 && c == 0)
+        // 198.18.0.0/15（ベンチマーク計測用。内部ネットワークに割り当てられる）
+        || (a == 198 && (b == 18 || b == 19))
         // 224.0.0.0/4 マルチキャストと 240.0.0.0/4 予約帯域。公開 Web サーバーがこの帯域に存在することはない
         || ip.is_multicast()
         || a >= 240
 }
 
 fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
-    let first = ip.segments()[0];
+    let seg = ip.segments();
+    let first = seg[0];
     ip.is_loopback()
         || ip.is_unspecified()
         // fe80::/10 リンクローカル
@@ -60,9 +65,24 @@ fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
         // ff00::/8 マルチキャスト
         || (first & 0xFF00) == 0xFF00
         // 64:ff9b::/96 NAT64。NAT64 ゲートウェイのあるネットワークでは埋め込まれた IPv4 へ変換されて到達する
-        || (ip.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0] && is_blocked_ipv4(ipv4_tail(ip)))
+        || (seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0] && is_blocked_ipv4(ipv4_tail(ip)))
+        // 64:ff9b:1::/48 ローカル用 NAT64（RFC 8215）
+        || (first == 0x64 && seg[1] == 0xff9b && seg[2] == 1)
+        // 2002::/16 6to4。埋め込まれた IPv4 が拒否対象ならリレー経由で到達する
+        || (first == 0x2002 && is_blocked_ipv4(six_to_four_tail(ip)))
         // ::/96 IPv4-compatible（非推奨形式だが ::127.0.0.1 として解釈する実装がある）
-        || (ip.segments()[..6].iter().all(|s| *s == 0) && is_blocked_ipv4(ipv4_tail(ip)))
+        || (seg[..6].iter().all(|s| *s == 0) && is_blocked_ipv4(ipv4_tail(ip)))
+}
+
+/// 6to4 (2002:AABB:CCDD::/48) に埋め込まれた IPv4 を取り出す。
+fn six_to_four_tail(ip: Ipv6Addr) -> Ipv4Addr {
+    let s = ip.segments();
+    Ipv4Addr::new(
+        (s[1] >> 8) as u8,
+        (s[1] & 0xFF) as u8,
+        (s[2] >> 8) as u8,
+        (s[2] & 0xFF) as u8,
+    )
 }
 
 fn ipv4_tail(ip: Ipv6Addr) -> Ipv4Addr {
@@ -90,7 +110,10 @@ pub fn check_url(url: &Url, deny_private: bool) -> Result<(), String> {
         None => return Err("URL has no host".to_owned()),
     };
     if is_blocked_ip(ip) {
-        return Err(format!("private network address {} is not allowed", ip));
+        return Err(format!(
+            "private network address {} is not allowed (set STILLO_ALLOW_PRIVATE_NETWORK=1 to allow private hosts)",
+            ip
+        ));
     }
     Ok(())
 }
@@ -168,9 +191,18 @@ mod tests {
             "224.0.0.1",
             "239.255.255.250",
             "240.0.0.1",
+            // 192.0.0.0/24・198.18.0.0/15
+            "192.0.0.1",
+            "198.18.0.1",
+            "198.19.255.255",
             "ff02::1",
             "64:ff9b::a9fe:a9fe",
             "64:ff9b::7f00:1",
+            // ローカル用 NAT64 (64:ff9b:1::/48)
+            "64:ff9b:1::1",
+            // 6to4 の埋め込み IPv4 が loopback / private
+            "2002:7f00:1::1",
+            "2002:c0a8:101::1",
         ] {
             assert!(is_blocked_ip(ip(s)), "{s} should be blocked");
         }
@@ -188,6 +220,11 @@ mod tests {
             "2606:4700::1111",
             "::ffff:8.8.8.8",
             "fec0::1",
+            // 6to4 の埋め込み IPv4 が公開アドレスなら許可
+            "2002:808:808::1",
+            // 198.18/15 の外側
+            "198.20.0.1",
+            "192.0.1.1",
         ] {
             assert!(!is_blocked_ip(ip(s)), "{s} should be allowed");
         }

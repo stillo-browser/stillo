@@ -1682,7 +1682,6 @@ dependencies = [
 name = "stillo-llm"
 version = "0.2.2"
 dependencies = [
- "anyhow",
  "reqwest",
  "serde",
  "serde_json",

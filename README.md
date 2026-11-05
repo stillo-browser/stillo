@@ -43,7 +43,8 @@ nix run github:stillo-browser/stillo -- dump https://example.com
 ### Cargo
 
 ```bash
-cargo build --release
+cargo install stillo              # crates.io から
+cargo build --release             # チェックアウトから
 # バイナリは target/release/stillo に生成されます
 ```
 
@@ -142,11 +143,9 @@ stillo dump https://your-spa-app.example.com
 | 3 | llama.cpp | `LLAMA_CPP_BASE_URL`（モデル: `LLAMA_CPP_MODEL`、デフォルト `default`、APIキー不要） |
 | 4 | Ollama（ローカル） | `OLLAMA_BASE_URL`（例 `http://localhost:11434/`）、`OLLAMA_MODEL`（デフォルト `llama3`） |
 
-いずれも設定されていない場合はエラーになります（Ollama への暗黙の接続は行いません）。ベースURLが不正な場合もエラーになります。OpenAI互換APIを持つ任意のプロバイダー（LM Studio等）は `OPENAI_BASE_URL` と `OPENAI_API_KEY` で利用できます。
+いずれも設定されていない場合はエラーになります（Ollama への暗黙の接続は行いません）。ベースURLが不正な場合もエラーになります。OpenAI互換APIを持つ任意のプロバイダー（LM Studio等）は `OPENAI_BASE_URL` と `OPENAI_API_KEY` で利用できます。`qa` / `summarize` / `extract` は、プロバイダーが未設定ならページ取得の前に設定方法を示して終了します（無駄なフェッチをしません）。
 
-ページ本文は `<document>` タグで区切ってLLMに渡し、本文中の指示に従わないよう system プロンプトで指定しています。出力が `max_tokens` に達して途中で切れた場合、`qa`・`summarize` は警告付きで部分出力を表示し、`extract` はエラーにします。
-
-プロバイダーが1つも設定されておらず、既定の Ollama（`localhost:11434`）にも到達できない場合、`qa` / `summarize` / `extract` はページ取得の前に設定方法を示すエラーで終了します（無駄なフェッチをしません）。
+ページ本文は `<document>` タグで区切ってLLMに渡し、本文中の指示に従わないよう system プロンプトで指定しています。出力が `max_tokens` に達して途中で切れた場合、`qa`・`summarize` は警告付きで部分出力を表示し、`extract` はエラーにします。`extract --format json` はコードフェンスを外した上で JSON として検証し、解釈できない出力はエラー（終了コード 1）にします。
 
 ```bash
 # Anthropic でQ&A
@@ -178,7 +177,7 @@ stillo qa "記事の要点は？" https://example.com/article
 | `search_web` | Web検索して結果を返す（format=markdown\|links）。ボットブロック時はエラーを明示 |
 | `extract_structured` | LLMを使って指定フィールドをJSONで抽出する（[LLM連携](#llm連携)のプロバイダー設定が必要）。JSONとして解釈できない出力・途中で切れた出力はエラー |
 
-MCP経由のページ取得は静的HTTP取得のみで、`dump` コマンドのようなSPA委譲やフレーム展開は行いません。切り詰めた場合は出力に全体長と次の `offset` を明記します。リクエストは並行処理され、`notifications/cancelled` で実行中のツール呼び出しを中断できます。
+MCP経由のページ取得は静的HTTP取得のみで、`dump` コマンドのようなSPA委譲やフレーム展開は行いません。切り詰めた場合は出力に全体長と次の `offset` を明記します。リクエストは並行処理され、`notifications/cancelled` で実行中のツール呼び出しを中断できます。JSON の形は CLI と異なり、`fetch_url` は `url` / `title` / `byline` / `body_text` / `offset` / `total_chars` / `truncated` / `next_offset` を返します（CLI の `dump --format json` は Markdown 本文を `content` で返します）。
 
 `fetch_url`・`read_links`・`extract_structured` は取得先URLをLLMが決めるため、loopback・プライベートアドレス（RFC1918）・リンクローカル（169.254.0.0/16 等）・ULA への接続を既定で拒否します。判定はDNS解決後のIPとリダイレクトの各ホップに対して行います。拒否モードでは `HTTP_PROXY` 等のプロキシ設定を使いません。ローカルの開発サーバー等を読ませる場合は `STILLO_ALLOW_PRIVATE_NETWORK=1` を設定してください。URLスキームは http/https のみ受け付けます。CLI（`stillo dump` 等）にはこの制限はありません。
 
@@ -229,15 +228,14 @@ DuckDuckGo HTML エンドポイントは常に末尾のフォールバックと�
 ## 開発
 
 ```bash
-# ビルド
+# ビルド（CLI は CDP 委譲込みでビルドされる）
 cargo build
 
 # テスト
 cargo test
-
-# CDPサポートを有効にしてビルド
-cargo build --features stillo-fetcher/cdp
 ```
+
+`stillo-fetcher` クレート自体は `cdp` feature が既定で無効です（ライブラリ利用者が WebSocket 依存を持たないため）。CLI は `features = ["cdp"]` を指定しているので、リリースバイナリでも Chrome 委譲が使えます。
 
 ログレベルは `RUST_LOG` 環境変数で制御できます（stderrに出力）。
 

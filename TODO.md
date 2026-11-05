@@ -24,6 +24,13 @@
 
 ## Done
 
+- [x] [IMPROVE] Opus 4レンズレビュー（セキュリティ / Rust設計 / UX / 性能）と1サイクルの修正 <!-- 2026-11-05 -->
+  - レビューは `claude -p --model opus --permission-mode plan` に観点別プロンプトを渡して並列実行（read-only）。指摘は file:line 付きで返し、こちらで裏取りしてから採用
+  - 修正: `extract --format json` の JSON 検証（コードフェンス除去・失敗時 exit 1・生出力の制御文字除去）、CLI help の虚偽修正（URL 直接指定・search のクエリ必須・`--timeout` の search 反映）、CDP feature を CLI で既定有効化、プロンプト境界に `source_url` / `fields` を追加、検索結果 URL のスキーム検査、net_guard に 192.0.0/24・198.18/15・64:ff9b:1::/48・6to4 を追加、MCP ツール説明、User-Agent のバージョン追従、フレーム数上限＋全体期限、llm の未使用 anyhow 削除
+  - レビュー2周目で自分の退行を検出して修正: 検索の全体期限とバックエンド別タイムアウトが同値でフォールバックが死んでいた → バックエンド 20 秒固定＋全体期限、`--format` のグローバル解除で `qa --format` が exit 2 になっていた → グローバルとローカルの併用に戻した、LLM 生出力の制御文字をエラー文から除去
+  - 次サイクル候補: CLI の SSRF（フレーム/リダイレクト）、CDP の net_guard 未適用、MCP の offset 再取得キャッシュ、共有 HTTP クライアント、LLM リトライ
+  - File: crates/{cli,core,fetcher,llm,mcp}/src, README.md, .github/workflows/ci.yml
+
 - [x] [IMPROVE] 大型ニュースサイトの出力サイズ制限 <!-- 2026-05-16, mitigated 2026-11-05 -->
   - `https://www.npr.org/sections/news/` で 60KB の出力が返った（通常の 3〜5 倍）
   - 対策 (A) を実装: CLI `--max-chars`、MCP `fetch_url` の `max_chars` 引数で切り詰め可能。切り詰め時は末尾にマーカー、JSON では `truncated` / `content_chars`

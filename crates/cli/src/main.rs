@@ -33,26 +33,26 @@ async fn main() -> Result<()> {
         Some(Command::Dump {
             url,
             format,
+            max_chars,
             delegate,
             no_delegate,
         }) => {
             let fmt = format.unwrap_or(cli.format);
+            let max = max_chars.or(cli.max_chars);
             let del = delegate.or(cli.delegate);
             let no_del = no_delegate || cli.no_delegate;
-            dump(&url, &fmt, cli.timeout, del.as_ref(), no_del, cli.max_chars).await?;
+            dump(&url, &fmt, cli.timeout, del.as_ref(), no_del, max).await?;
         }
-        Some(Command::Browse { url }) => {
+        Some(Command::Browse {
+            url,
+            format,
+            max_chars,
+        }) => {
+            let fmt = format.unwrap_or(cli.format);
+            let max = max_chars.or(cli.max_chars);
             let del = cli.delegate.clone();
             let no_del = cli.no_delegate;
-            browse(
-                &url,
-                cli.timeout,
-                del.as_ref(),
-                no_del,
-                &cli.format,
-                cli.max_chars,
-            )
-            .await?;
+            browse(&url, cli.timeout, del.as_ref(), no_del, &fmt, max).await?;
         }
         Some(Command::Qa { question, url }) => {
             let del = cli.delegate.clone();
@@ -74,16 +74,22 @@ async fn main() -> Result<()> {
             let no_del = cli.no_delegate;
             extract_fields(&fields, &url, &fmt, cli.timeout, del.as_ref(), no_del).await?;
         }
-        Some(Command::Search { query }) => {
+        Some(Command::Search {
+            query,
+            format,
+            max_chars,
+        }) => {
+            let fmt = format.unwrap_or(cli.format);
+            let max = max_chars.or(cli.max_chars);
             let q = query.join(" ");
-            let page = run_web_search(&q).await?;
+            let page = run_web_search(&q, cli.timeout).await?;
             browse_page(
                 page,
                 cli.timeout,
                 cli.delegate.as_ref(),
                 cli.no_delegate,
-                &cli.format,
-                cli.max_chars,
+                &fmt,
+                max,
             )
             .await?;
         }
@@ -165,7 +171,7 @@ async fn browse_page(
                 // 検索結果ページは stillo:// スキームで HTTP 取得できないため、同じクエリで再検索する
                 let result = match search_query_from_url(&reload_url) {
                     Some(query) => {
-                        let search = run_web_search(&query);
+                        let search = run_web_search(&query, timeout);
                         load_cancellable(&mut browser, &mut session, &reload_url, search).await?
                     }
                     None => {
@@ -180,7 +186,7 @@ async fn browse_page(
                 }
             }
             TuiResult::WebSearch(query) => {
-                let search = run_web_search(&query);
+                let search = run_web_search(&query, timeout);
                 match load_cancellable(&mut browser, &mut session, &query, search).await? {
                     Some(Ok(page)) => browser.load_page(page),
                     Some(Err(e)) => browser.show_error(format!("search failed: {:#}", e)),
@@ -253,11 +259,9 @@ async fn fetch_browse_page(
 }
 
 /// Web検索を実行し、結果を BrowsePage に変換する。
-/// バックエンドチェーン・ブロック検出は stillo-fetcher::search が担う。
-async fn run_web_search(query: &str) -> Result<stillo_core::BrowsePage> {
-    let results = stillo_fetcher::web_search(query)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+/// バックエンドチェーン・ブロック検出・全体の期限は stillo-fetcher::search が担う。
+async fn run_web_search(query: &str, timeout: u64) -> Result<stillo_core::BrowsePage> {
+    let results = stillo_fetcher::web_search_with_timeout(query, timeout).await?;
     let md = stillo_fetcher::results_to_markdown(query, &results);
     let url = search_page_url(query)?;
     Ok(stillo_core::parse_markdown_to_ast(&md, &url))
@@ -341,7 +345,10 @@ async fn fetch_raw(
                 "frameset detected ({} frames), fetching frame contents",
                 frames.len()
             );
-            fetch_richest_frame(&fetcher, &extractor, frames)
+            // フレーム取得は全体で 1 つの期限に収める（N フレーム × per-request タイムアウトを防ぐ）
+            let deadline =
+                tokio::time::Instant::now() + std::time::Duration::from_secs(timeout.max(1));
+            fetch_richest_frame(&fetcher, &extractor, frames, deadline)
                 .await
                 .unwrap_or(raw)
         }
@@ -371,16 +378,25 @@ async fn fetch_raw(
     }
 }
 
+/// フレーム数に上限を設ける。N フレームを順に取得すると全体の所要時間が N 倍になるため
+const MAX_FRAMES: usize = 8;
+
 /// 複数フレームを順次取得してテキスト量が最多のものを返す。
 /// URL に menu/nav/sidebar を含むフレームは低スコアとして扱う。
+/// `deadline` を過ぎたら残りのフレームは諦める。
 async fn fetch_richest_frame(
     fetcher: &HttpFetcher,
     extractor: &ContentExtractor,
     frames: Vec<Url>,
+    deadline: tokio::time::Instant,
 ) -> Option<stillo_core::document::RawHtml> {
     let mut best: Option<(stillo_core::document::RawHtml, i64)> = None;
 
-    for url in frames {
+    for url in frames.into_iter().take(MAX_FRAMES) {
+        if tokio::time::Instant::now() >= deadline {
+            tracing::debug!("frame fetch deadline reached, skipping remaining frames");
+            break;
+        }
         let Ok(raw) = fetcher.fetch(&url).await else {
             continue;
         };
@@ -546,7 +562,7 @@ async fn qa(
     no_delegate: bool,
 ) -> Result<()> {
     // プロバイダー未設定ならフェッチ前に落とす（無駄な取得をしない）
-    let llm = LlmProvider::from_env().map_err(|e| anyhow::anyhow!("{}", e))?;
+    let llm = LlmProvider::from_env()?;
     let doc = fetch_as_markdown(url, timeout, delegate, no_delegate).await?;
     let messages = prompts::qa_prompt(question, &doc);
     let answer = accept_truncated(llm.complete(messages, &CompletionConfig::default()).await)
@@ -562,7 +578,7 @@ async fn summarize(
     delegate: Option<&DelegateTarget>,
     no_delegate: bool,
 ) -> Result<()> {
-    let llm = LlmProvider::from_env().map_err(|e| anyhow::anyhow!("{}", e))?;
+    let llm = LlmProvider::from_env()?;
     let doc = fetch_as_markdown(url, timeout, delegate, no_delegate).await?;
     let messages = prompts::summarize_prompt(&doc);
     let summary = accept_truncated(llm.complete(messages, &CompletionConfig::default()).await)
@@ -579,7 +595,7 @@ async fn extract_fields(
     delegate: Option<&DelegateTarget>,
     no_delegate: bool,
 ) -> Result<()> {
-    let llm = LlmProvider::from_env().map_err(|e| anyhow::anyhow!("{}", e))?;
+    let llm = LlmProvider::from_env()?;
     let doc = fetch_as_markdown(url, timeout, delegate, no_delegate).await?;
     let messages = prompts::extract_prompt(fields, &doc);
     // 抽出結果は途中で切れると JSON として壊れるため、qa/summarize と違い Truncated はエラーのまま扱う
@@ -588,12 +604,12 @@ async fn extract_fields(
         .await
         .context("LLM request failed")?;
 
-    // JSON 出力形式の場合は JSON として再フォーマットする
+    // JSON 出力形式の場合は JSON として検証してから出す。
+    // パースできない出力をそのまま流すと、スクリプト側が「成功した壊れた JSON」を受け取る
     if matches!(format, OutputFormat::Json) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&result) {
-            println!("{}", serde_json::to_string_pretty(&v)?);
-            return Ok(());
-        }
+        let normalized = stillo_llm::normalize_json_output(&result)?;
+        println!("{}", normalized);
+        return Ok(());
     }
     println!("{}", stillo_core::strip_control_chars(&result));
     Ok(())
@@ -718,6 +734,67 @@ mod tests {
         assert_eq!(search_query_from_url(&http), None);
         let other = Url::parse("stillo://other?q=x").unwrap();
         assert_eq!(search_query_from_url(&other), None);
+    }
+
+    /// --format はトップレベルとサブコマンドの両方で受け付ける（後方互換）。
+    #[test]
+    fn cli_accepts_format_before_and_after_url() {
+        let cli = Cli::try_parse_from(["stillo", "--format", "json", "https://example.com"])
+            .expect("global --format before URL");
+        assert!(matches!(cli.format, OutputFormat::Json));
+
+        let cli =
+            Cli::try_parse_from(["stillo", "dump", "https://example.com", "--format", "plain"])
+                .expect("dump has its own --format");
+        match cli.command {
+            Some(Command::Dump {
+                format: Some(OutputFormat::Plain),
+                ..
+            }) => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        // サブコマンド側に --format が無いものはグローバル指定として通る
+        let cli = Cli::try_parse_from([
+            "stillo",
+            "qa",
+            "q",
+            "https://example.com",
+            "--format",
+            "json",
+        ])
+        .expect("global --format after subcommand args");
+        assert!(matches!(cli.command, Some(Command::Qa { .. })));
+    }
+
+    #[test]
+    fn cli_requires_search_query() {
+        assert!(Cli::try_parse_from(["stillo", "search"]).is_err());
+        assert!(Cli::try_parse_from(["stillo", "search", "rust"]).is_ok());
+    }
+
+    #[test]
+    fn cli_accepts_max_chars_for_dump_and_search() {
+        let cli =
+            Cli::try_parse_from(["stillo", "dump", "https://example.com", "--max-chars", "10"])
+                .expect("dump --max-chars");
+        match cli.command {
+            Some(Command::Dump {
+                max_chars: Some(10),
+                ..
+            }) => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from(["stillo", "search", "rust", "--format", "json"])
+            .expect("search --format");
+        match cli.command {
+            Some(Command::Search {
+                format: Some(OutputFormat::Json),
+                ..
+            }) => {}
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     fn page(markdown: &str) -> stillo_core::BrowsePage {
