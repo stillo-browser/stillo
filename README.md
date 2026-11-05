@@ -69,9 +69,16 @@ stillo dump --no-delegate https://example.com
 # タイムアウト秒数を指定（デフォルト30秒）
 stillo dump --timeout 60 https://example.com
 
+# 出力を切り詰める（長い一覧ページをLLMに渡すときなど）
+stillo dump --max-chars 20000 https://example.com
+
 # 詳細ログを出力（stderrに出力）
 stillo dump -v https://example.com
 ```
+
+- `--format json` は `url` / `title` / `content`（Markdown本文）/ `content_chars` / `truncated` / `links` を返します。`content` は `--max-chars` で切り詰められ、切り詰め時は `truncated` が `true` になります。
+- 標準出力が端末でない場合（パイプ・リダイレクト・CI）、`stillo <URL>` と `stillo search <query>` は TUI を開かずに本文／検索結果をテキストで出力します。`stillo search rust tokio | less` のようにそのまま使えます。
+- `--format plain` はタイトルのみを先頭に置き、Markdown の見出し記号は付けません。
 
 ## サブコマンド
 
@@ -79,7 +86,7 @@ stillo dump -v https://example.com
 |----------|------|
 | `dump`      | ページをMarkdown/テキスト/JSONとして stdout に出力 |
 | `browse`    | TUIブラウザとして起動 |
-| `search`    | Web検索して結果をTUIで表示（`stillo search <query>`） |
+| `search`    | Web検索して結果を表示（端末ではTUI、パイプ時はテキスト） |
 | `qa`        | ページについてLLMに質問（LLMプロバイダー設定が必要） |
 | `summarize` | ページをLLMで要約（LLMプロバイダー設定が必要） |
 | `extract`   | 指定フィールドをLLMで抽出（LLMプロバイダー設定が必要） |
@@ -94,7 +101,12 @@ SPAと判定されたページは以下の優先順位で委譲を試みます�
 3. **Jina Reader** — `JINA_API_KEY` が設定されているか `STILLO_ENABLE_JINA=1` のときのみ使用（閲覧URLを外部サービスへ送信するためオプトイン）
 4. **Firecrawl** — `FIRECRAWL_URL` と `FIRECRAWL_API_KEY` が両方設定されていれば使用
 
-委譲チェーン全体の所要時間は `--timeout` で打ち切られます。全ターゲットが失敗した場合は静的HTMLにフォールバックします。
+委譲チェーン全体の所要時間は `--timeout` で打ち切られます。全ターゲットが失敗した場合は静的HTMLにフォールバックし、その旨を stderr に1行だけ案内します（JS rendering unavailable...）。
+
+### 判定の挙動
+
+- 本文が500文字以上のページは、フレームワークの痕跡があっても静的として処理します（SSR ページは委譲不要）。
+- 本文が500文字未満のときだけ委譲を検討し、フレームワーク痕跡（`__NEXT_DATA__` 等）または JS 実行の痕跡（`#root` / `#app` / `#svelte` などのマウント要素、512文字超のインラインスクリプト）がある場合に SPA と判定します。外部スクリプトの有無は根拠にしません（解析タグと区別できないため）。
 
 ### Chrome CDP を使う場合
 
@@ -133,6 +145,8 @@ stillo dump https://your-spa-app.example.com
 いずれも設定されていない場合はエラーになります（Ollama への暗黙の接続は行いません）。ベースURLが不正な場合もエラーになります。OpenAI互換APIを持つ任意のプロバイダー（LM Studio等）は `OPENAI_BASE_URL` と `OPENAI_API_KEY` で利用できます。
 
 ページ本文は `<document>` タグで区切ってLLMに渡し、本文中の指示に従わないよう system プロンプトで指定しています。出力が `max_tokens` に達して途中で切れた場合、`qa`・`summarize` は警告付きで部分出力を表示し、`extract` はエラーにします。
+
+プロバイダーが1つも設定されておらず、既定の Ollama（`localhost:11434`）にも到達できない場合、`qa` / `summarize` / `extract` はページ取得の前に設定方法を示すエラーで終了します（無駄なフェッチをしません）。
 
 ```bash
 # Anthropic でQ&A
