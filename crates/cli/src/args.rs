@@ -7,10 +7,10 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// URLを直接指定した場合は dump として動作
+    /// URLを直接指定した場合は browse（端末ではTUI、パイプ時は本文を出力）
     pub url: Option<Url>,
 
-    /// 出力形式
+    /// 出力形式（サブコマンドが独自の --format を持つ場合はそちらが優先）
     #[arg(long, default_value = "markdown", global = true)]
     pub format: OutputFormat,
 
@@ -40,15 +40,29 @@ pub enum Command {
     /// URLのコンテンツをMarkdown/テキストとして stdout に出力
     Dump {
         url: Url,
+        /// 出力形式（既定はグローバルの --format）
         #[arg(long)]
         format: Option<OutputFormat>,
+        /// 出力の最大文字数（既定はグローバルの --max-chars）
+        #[arg(long)]
+        max_chars: Option<usize>,
+        /// SPA委譲先を明示指定（既定は auto）
         #[arg(long)]
         delegate: Option<DelegateTarget>,
+        /// JS委譲を無効化し、静的HTMLのみ処理する
         #[arg(long)]
         no_delegate: bool,
     },
     /// TUIブラウザモード
-    Browse { url: Url },
+    Browse {
+        url: Url,
+        /// 端末でない場合の出力形式
+        #[arg(long)]
+        format: Option<OutputFormat>,
+        /// 端末でない場合の出力上限文字数
+        #[arg(long)]
+        max_chars: Option<usize>,
+    },
     /// ページについてLLMに質問（LLMプロバイダーの環境変数が必要: ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL / OPENAI_API_KEY / LLAMA_CPP_BASE_URL / OLLAMA_BASE_URL）
     Qa { question: String, url: Url },
     /// ページをLLMで要約（LLMプロバイダーの環境変数が必要: qa と同じ）
@@ -62,8 +76,15 @@ pub enum Command {
     },
     /// Web検索して結果を表示（端末ではTUI、パイプ・リダイレクト時はテキスト出力）
     Search {
-        /// 検索クエリ
+        /// 検索クエリ（1つ以上必要）
+        #[arg(required = true, value_name = "QUERY")]
         query: Vec<String>,
+        /// 端末でない場合の出力形式
+        #[arg(long)]
+        format: Option<OutputFormat>,
+        /// 端末でない場合の出力上限文字数
+        #[arg(long)]
+        max_chars: Option<usize>,
     },
     /// MCPサーバーとして起動（stdio transport、JSON-RPC 2.0）
     Mcp,

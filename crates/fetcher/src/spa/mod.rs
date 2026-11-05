@@ -65,7 +65,7 @@ impl SpaDelegationChain {
         let http = ClientBuilder::new()
             .use_rustls_tls()
             .timeout(Duration::from_secs(SPA_HTTP_TIMEOUT_SECS))
-            .user_agent("stillo/0.1")
+            .user_agent(crate::http::USER_AGENT)
             .build()
             .expect("failed to build SPA HTTP client");
 
