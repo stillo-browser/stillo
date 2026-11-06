@@ -10,15 +10,35 @@ use stillo_core::{
     document::{DelegationTarget, SpaDetection},
     ContentExtractor, ExtractorConfig, MarkdownConfig, MarkdownSerializer,
 };
-use stillo_fetcher::{HttpConfig, HttpFetcher, SpaDelegationChain};
+use stillo_fetcher::{
+    DerivedGuard, HttpConfig, HttpFetcher, PrivateNetworkPolicy, SpaDelegationChain,
+};
 use stillo_llm::{prompts, CompletionConfig, LlmError, LlmProvider};
 use stillo_mcp::McpServer;
 use stillo_renderer::{TuiBrowser, TuiResult, TuiSession};
 use url::Url;
 
+/// `--allow-private` の指定。`fetch_raw` はサブコマンドの引数を持たないため静的領域に置く。
+static ALLOW_PRIVATE_FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// プライベートネットワーク宛て取得の方針。
+///
+/// 既定は「起点が公開アドレスなら派生先も公開必須」。`--allow-private` か
+/// `STILLO_ALLOW_PRIVATE_NETWORK=1` で全許可になる。
+fn private_network_policy() -> PrivateNetworkPolicy {
+    let flag = ALLOW_PRIVATE_FLAG.get().copied().unwrap_or(false);
+    let env = std::env::var("STILLO_ALLOW_PRIVATE_NETWORK").is_ok_and(|v| v.trim() == "1");
+    if flag || env {
+        PrivateNetworkPolicy::Allow
+    } else {
+        PrivateNetworkPolicy::GuardPublicOrigin
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let _ = ALLOW_PRIVATE_FLAG.set(cli.allow_private);
 
     let log_level = if cli.verbose { "debug" } else { "warn" };
     tracing_subscriber::fmt()
@@ -323,14 +343,18 @@ async fn fetch_raw(
 ) -> Result<stillo_core::document::RawHtml> {
     let http_config = HttpConfig {
         timeout_secs: timeout,
+        private_network: private_network_policy(),
         ..Default::default()
     };
     let fetcher = HttpFetcher::new(http_config);
     let extractor = ContentExtractor::new(ExtractorConfig::default());
 
+    // 起点が公開アドレスなら、フレームと委譲先も公開アドレスに限る
+    let guard = fetcher.derived_guard(url).await;
+
     tracing::debug!("fetching {}", url);
     let raw = fetcher
-        .fetch(url)
+        .fetch_with_guard(url, guard)
         .await
         .with_context(|| format!("failed to fetch {}", url))?;
     tracing::debug!("fetched {} bytes (status={})", raw.bytes.len(), raw.status);
@@ -348,7 +372,7 @@ async fn fetch_raw(
             // フレーム取得は全体で 1 つの期限に収める（N フレーム × per-request タイムアウトを防ぐ）
             let deadline =
                 tokio::time::Instant::now() + std::time::Duration::from_secs(timeout.max(1));
-            fetch_richest_frame(&fetcher, &extractor, frames, deadline)
+            fetch_richest_frame(&fetcher, &extractor, frames, deadline, guard)
                 .await
                 .unwrap_or(raw)
         }
@@ -369,11 +393,11 @@ async fn fetch_raw(
                 "SPA suspected (text_length={}), trying delegation",
                 text_length
             );
-            delegate_or_fallback(url, raw, delegate, timeout).await
+            delegate_or_fallback(url, raw, delegate, timeout, guard).await
         }
         SpaDetection::FrameworkDetected { framework } => {
             tracing::debug!("JS framework detected ({:?}), trying delegation", framework);
-            delegate_or_fallback(url, raw, delegate, timeout).await
+            delegate_or_fallback(url, raw, delegate, timeout, guard).await
         }
     }
 }
@@ -389,6 +413,7 @@ async fn fetch_richest_frame(
     extractor: &ContentExtractor,
     frames: Vec<Url>,
     deadline: tokio::time::Instant,
+    guard: DerivedGuard,
 ) -> Option<stillo_core::document::RawHtml> {
     let mut best: Option<(stillo_core::document::RawHtml, i64)> = None;
 
@@ -397,7 +422,7 @@ async fn fetch_richest_frame(
             tracing::debug!("frame fetch deadline reached, skipping remaining frames");
             break;
         }
-        let Ok(raw) = fetcher.fetch(&url).await else {
+        let Ok(raw) = fetcher.fetch_with_guard(&url, guard).await else {
             continue;
         };
         // ネストしたフレームセットはスキップ
@@ -655,10 +680,13 @@ async fn delegate_or_fallback(
     static_raw: stillo_core::document::RawHtml,
     delegate: Option<&DelegateTarget>,
     timeout: u64,
+    guard: DerivedGuard,
 ) -> Result<stillo_core::document::RawHtml> {
     // 静的取得と同じ --timeout を委譲チェーン全体の期限にする。CDP の読み込み待ち等が
     // 積み重なって指定時間を大きく超えないようにするため
-    let chain = build_delegation_chain(delegate).with_timeout(Duration::from_secs(timeout));
+    let chain = build_delegation_chain(delegate)
+        .with_timeout(Duration::from_secs(timeout))
+        .with_private_guard(guard);
 
     match chain.fetch_with_js(url).await {
         Ok(delegated) => Ok(delegated),

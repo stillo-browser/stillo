@@ -9,6 +9,7 @@
 
 use std::path::PathBuf;
 use std::time::Duration;
+use stillo_fetcher::DerivedGuard;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -200,7 +201,7 @@ async fn test_cdp_fetches_js_rendered_content() {
         .parse()
         .unwrap();
 
-    let result = stillo_fetcher::spa::cdp::fetch_via_cdp(port, &url).await;
+    let result = stillo_fetcher::spa::cdp::fetch_via_cdp(port, &url, DerivedGuard::Allow).await;
     let _ = std::fs::remove_dir_all(&user_data_dir);
 
     let raw = result.expect("fetch_via_cdp が失敗しました");
@@ -219,7 +220,7 @@ async fn test_cdp_error_when_chrome_not_running() {
     let port = free_port().await;
     let url = "https://example.com".parse().unwrap();
 
-    let result = stillo_fetcher::spa::cdp::fetch_via_cdp(port, &url).await;
+    let result = stillo_fetcher::spa::cdp::fetch_via_cdp(port, &url, DerivedGuard::Allow).await;
 
     assert!(result.is_err(), "Chrome未起動時はエラーになるべきです");
 }
@@ -244,7 +245,7 @@ async fn test_cdp_leaves_chrome_running_after_fetch() {
         .parse()
         .unwrap();
 
-    let _ = stillo_fetcher::spa::cdp::fetch_via_cdp(port, &url).await;
+    let _ = stillo_fetcher::spa::cdp::fetch_via_cdp(port, &url, DerivedGuard::Allow).await;
 
     assert!(
         stillo_fetcher::spa::cdp::is_chrome_available(port).await,
@@ -276,7 +277,7 @@ async fn test_cdp_errors_for_unreachable_target() {
 
     let result = tokio::time::timeout(
         Duration::from_secs(60),
-        stillo_fetcher::spa::cdp::fetch_via_cdp(port, &url),
+        stillo_fetcher::spa::cdp::fetch_via_cdp(port, &url, DerivedGuard::Allow),
     )
     .await
     .expect("到達不能ターゲットに対してタイムアウト予算内に完了しませんでした(ハングの可能性)");
@@ -310,7 +311,7 @@ async fn test_cdp_reports_final_url_after_redirect() {
         .parse()
         .unwrap();
 
-    let result = stillo_fetcher::spa::cdp::fetch_via_cdp(port, &url).await;
+    let result = stillo_fetcher::spa::cdp::fetch_via_cdp(port, &url, DerivedGuard::Allow).await;
     let _ = std::fs::remove_dir_all(&user_data_dir);
 
     let raw = result.expect("fetch_via_cdp が失敗しました");
@@ -337,7 +338,7 @@ async fn test_cdp_closes_tab_when_cancelled() {
 
     let result = tokio::time::timeout(
         Duration::from_secs(2),
-        stillo_fetcher::spa::cdp::fetch_via_cdp(port, &url),
+        stillo_fetcher::spa::cdp::fetch_via_cdp(port, &url, DerivedGuard::Allow),
     )
     .await;
     assert!(
@@ -348,4 +349,30 @@ async fn test_cdp_closes_tab_when_cancelled() {
     let after = wait_page_count(port, baseline).await;
     let _ = std::fs::remove_dir_all(&user_data_dir);
     assert_eq!(after, baseline, "キャンセル時にタブが閉じられていません");
+}
+
+#[tokio::test]
+async fn test_cdp_blocks_private_target_when_guarded() {
+    // 起点が公開アドレスだった場合、委譲先（Chrome）にも内部アドレスを渡さない。
+    // 検査はタブを作る前に行われるため、Chrome の起動は不要
+    let url: url::Url = "http://169.254.169.254/latest/meta-data/".parse().unwrap();
+    let err = stillo_fetcher::spa::cdp::fetch_via_cdp(9222, &url, DerivedGuard::Enforce)
+        .await
+        .expect_err("内部アドレスへの委譲が拒否されていません");
+    match err {
+        stillo_core::document::FetchError::Blocked { reason, .. } => {
+            assert!(reason.contains("169.254.169.254"), "{reason}");
+        }
+        other => panic!("expected Blocked, got {other:?}"),
+    }
+
+    // 監視モードでは同じ URL でも事前検査を通る（Chrome 未起動のエラーになる）
+    let allowed = stillo_fetcher::spa::cdp::fetch_via_cdp(9222, &url, DerivedGuard::Allow).await;
+    assert!(
+        !matches!(
+            allowed,
+            Err(stillo_core::document::FetchError::Blocked { .. })
+        ),
+        "{allowed:?}"
+    );
 }

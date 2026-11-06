@@ -30,6 +30,14 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_delegate: bool,
 
+    /// プライベートネットワーク宛ての取得を許可する（リダイレクト先・フレーム・JS遷移も含む）
+    ///
+    /// 既定では、起点 URL が公開アドレスなら、そこから派生する取得も公開アドレスに限る
+    /// （公開ページに仕込んだ内部向けリダイレクトで本文を抜き出されるのを防ぐ）。
+    /// ローカルの開発サーバーを直接読む場合は起点が非公開なので、この指定は要らない。
+    #[arg(long, global = true)]
+    pub allow_private: bool,
+
     /// 詳細ログ出力
     #[arg(short, long, global = true)]
     pub verbose: bool,

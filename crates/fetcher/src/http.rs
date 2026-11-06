@@ -1,15 +1,41 @@
 use crate::net_guard::{self, BlockedTarget, GuardedResolver};
 use reqwest::{redirect, Client, ClientBuilder, Response};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use stillo_core::document::{FetchError, RawHtml};
-use url::Url;
+use url::{Host, Url};
 
 /// レスポンスボディ上限の既定値（10MB）。
 pub const DEFAULT_MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 
 /// 全 HTTP リクエストで使う User-Agent。クレートのバージョンに追従させる。
 pub const USER_AGENT: &str = concat!("stillo/", env!("CARGO_PKG_VERSION"));
+
+/// プライベートネットワーク宛ての取得をどこまで許すかの方針。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PrivateNetworkPolicy {
+    /// すべて許可する（ローカル開発用。`--allow-private` / `STILLO_ALLOW_PRIVATE_NETWORK=1`）。
+    Allow,
+    /// 起点 URL が公開アドレスなら、そこから派生する取得も公開アドレスに限定する（既定）。
+    ///
+    /// 公開ページのリダイレクト先や `<frame src>` を内部ネットワークへ飛ばし、その本文を
+    /// 外部 LLM へ送らせる経路を塞ぐ。ローカルの開発サーバーを直接読む使い方は起点が
+    /// 非公開なので、これまでどおり通る。
+    #[default]
+    GuardPublicOrigin,
+    /// 常に拒否する（MCP 経路）。
+    DenyAlways,
+}
+
+/// 1 回の取得について、宛先の検査を行うかどうか。
+///
+/// 起点の判定結果を、同じページから派生する取得（フレーム・JS 委譲）へ引き継ぐために使う。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DerivedGuard {
+    Enforce,
+    Allow,
+}
 
 pub struct HttpConfig {
     pub timeout_secs: u64,
@@ -20,9 +46,9 @@ pub struct HttpConfig {
     pub cookie_store: bool,
     /// レスポンスボディの上限バイト数。超えたら `FetchError::BodyTooLarge`
     pub max_body_bytes: usize,
-    /// true のとき loopback / private / link-local 等への接続を拒否する（SSRF 対策）。
-    /// URL を外部入力（LLM）が決める MCP 経路で有効にする
-    pub deny_private_network: bool,
+    /// プライベートネットワーク宛て取得の扱い（SSRF 対策）。
+    /// URL を外部入力（LLM・ページ内容）が決める経路では拒否寄りにする
+    pub private_network: PrivateNetworkPolicy,
 }
 
 impl Default for HttpConfig {
@@ -35,78 +61,60 @@ impl Default for HttpConfig {
             accept_language: "ja,en;q=0.9".to_owned(),
             cookie_store: true,
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
-            deny_private_network: false,
+            private_network: PrivateNetworkPolicy::default(),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct HttpFetcher {
-    client: Client,
+    /// 検査しないクライアント。非公開の起点（ローカル開発サーバー等）を直接読むときに使う
+    client_open: Client,
+    /// resolver とリダイレクトの各ホップで宛先を検査するクライアント
+    client_guarded: Client,
+    policy: PrivateNetworkPolicy,
     timeout_secs: u64,
     max_body_bytes: usize,
-    deny_private_network: bool,
 }
 
 impl HttpFetcher {
     pub fn new(config: HttpConfig) -> Self {
-        let deny_private = config.deny_private_network;
-        let redirect_policy = if config.follow_redirects {
-            let max = config.max_redirects;
-            // 既定の Policy::limited ではホップ先を検査できないため custom にする。
-            // ホスト名の宛先は resolver が検査するが、IP リテラルは DNS を経ないのでここで弾く
-            redirect::Policy::custom(move |attempt| {
-                if attempt.previous().len() >= max {
-                    return attempt.error(format!("too many redirects (max {})", max));
-                }
-                match net_guard::check_url(attempt.url(), deny_private) {
-                    Ok(()) => attempt.follow(),
-                    Err(reason) => {
-                        let reason = format!("redirect to {}: {}", attempt.url(), reason);
-                        attempt.error(BlockedTarget(reason))
-                    }
-                }
-            })
-        } else {
-            redirect::Policy::none()
-        };
-
-        let mut builder = ClientBuilder::new()
-            .use_rustls_tls()
-            .redirect(redirect_policy)
-            .cookie_store(config.cookie_store)
-            .timeout(Duration::from_secs(config.timeout_secs))
-            .user_agent(&config.user_agent)
-            .default_headers({
-                let mut headers = reqwest::header::HeaderMap::new();
-                if let Ok(val) = config.accept_language.parse() {
-                    headers.insert(reqwest::header::ACCEPT_LANGUAGE, val);
-                }
-                headers.insert(
-                    reqwest::header::ACCEPT,
-                    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-                        .parse()
-                        .unwrap(),
-                );
-                headers
-            });
-        if deny_private {
-            // プロキシ経由だと宛先の名前解決はプロキシ側で行われ、resolver の検査を素通りする。
-            // また社内プロキシ自体がプライベート IP なので、拒否モードではプロキシを使わない
-            builder = builder.dns_resolver(Arc::new(GuardedResolver)).no_proxy();
-        }
-        let client = builder.build().expect("failed to build HTTP client");
+        let policy = config.private_network;
+        // 方針が Allow でも検査用クライアントは作る。呼び出し側が明示的に
+        // DerivedGuard::Enforce を渡したときに、それを黙って無視しないため
+        let client_open = build_client(&config, false);
+        let client_guarded = build_client(&config, true);
 
         Self {
-            client,
+            client_open,
+            client_guarded,
+            policy,
             timeout_secs: config.timeout_secs,
             max_body_bytes: config.max_body_bytes,
-            deny_private_network: deny_private,
+        }
+    }
+
+    /// この起点 URL から派生する取得を検査すべきかを返す。
+    ///
+    /// 起点自身の取得は `fetch` が同じ規則で判定するため、呼び出し側が明示的に
+    /// 判定結果を使いたい場合（フレーム・委譲）だけ呼べばよい。
+    pub async fn derived_guard(&self, url: &Url) -> DerivedGuard {
+        match self.policy {
+            PrivateNetworkPolicy::Allow => DerivedGuard::Allow,
+            PrivateNetworkPolicy::DenyAlways => DerivedGuard::Enforce,
+            PrivateNetworkPolicy::GuardPublicOrigin => {
+                if origin_is_public(url).await {
+                    DerivedGuard::Enforce
+                } else {
+                    DerivedGuard::Allow
+                }
+            }
         }
     }
 
     pub async fn fetch(&self, url: &Url) -> Result<RawHtml, FetchError> {
-        self.fetch_inner(url, &[]).await
+        let guard = self.derived_guard(url).await;
+        self.fetch_with_guard(url, guard).await
     }
 
     /// 追加ヘッダーを付けて GET する（検索API等の認証ヘッダー用）。
@@ -115,22 +123,37 @@ impl HttpFetcher {
         url: &Url,
         headers: &[(&str, &str)],
     ) -> Result<RawHtml, FetchError> {
-        self.fetch_inner(url, headers).await
+        let guard = self.derived_guard(url).await;
+        self.fetch_inner(url, headers, guard).await
+    }
+
+    /// 起点の判定結果を明示して取得する（フレーム等の派生取得用）。
+    pub async fn fetch_with_guard(
+        &self,
+        url: &Url,
+        guard: DerivedGuard,
+    ) -> Result<RawHtml, FetchError> {
+        self.fetch_inner(url, &[], guard).await
     }
 
     async fn fetch_inner(
         &self,
         url: &Url,
         extra_headers: &[(&str, &str)],
+        guard: DerivedGuard,
     ) -> Result<RawHtml, FetchError> {
-        net_guard::check_url(url, self.deny_private_network).map_err(|reason| {
-            FetchError::Blocked {
-                url: url.clone(),
-                reason,
-            }
+        let deny = guard == DerivedGuard::Enforce;
+        net_guard::check_url(url, deny).map_err(|reason| FetchError::Blocked {
+            url: url.clone(),
+            reason,
         })?;
+        let client = if deny {
+            &self.client_guarded
+        } else {
+            &self.client_open
+        };
 
-        let mut request = self.client.get(url.as_str());
+        let mut request = client.get(url.as_str());
         for (name, value) in extra_headers {
             request = request.header(*name, *value);
         }
@@ -168,6 +191,75 @@ impl HttpFetcher {
             status,
         })
     }
+}
+
+/// リダイレクトの1ホップ先を検査する。`guarded` が false でもスキームは必ず検査する
+/// （`ftp:` 等へ落とすと、その本文がそのまま取得結果になる）。
+fn check_redirect_target(next: &Url, guarded: bool) -> Result<(), String> {
+    net_guard::check_url(next, guarded)
+        .map_err(|reason| format!("redirect to {}: {}", next, reason))
+}
+
+/// 起点 URL が公開アドレスだけを指すかを返す。解決できないホストは安全側（検査する）に倒す。
+async fn origin_is_public(url: &Url) -> bool {
+    match url.host() {
+        Some(Host::Ipv4(v4)) => !net_guard::is_blocked_ip(IpAddr::V4(v4)),
+        Some(Host::Ipv6(v6)) => !net_guard::is_blocked_ip(IpAddr::V6(v6)),
+        Some(Host::Domain(host)) => match tokio::net::lookup_host((host, 0)).await {
+            Ok(addrs) => {
+                let ips: Vec<IpAddr> = addrs.map(|a| a.ip()).collect();
+                net_guard::all_public(&ips)
+            }
+            Err(_) => true,
+        },
+        None => true,
+    }
+}
+
+fn build_client(config: &HttpConfig, guarded: bool) -> Client {
+    let redirect_policy = if config.follow_redirects {
+        let max = config.max_redirects;
+        // 既定の Policy::limited ではホップ先を検査できないため custom にする。
+        // スキーム検査は常に行い、検査モードでは IP リテラルのホップも弾く
+        // （ホスト名は resolver が解決結果で弾く）
+        redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() >= max {
+                return attempt.error(format!("too many redirects (max {})", max));
+            }
+            match check_redirect_target(attempt.url(), guarded) {
+                Ok(()) => attempt.follow(),
+                Err(reason) => attempt.error(BlockedTarget(reason)),
+            }
+        })
+    } else {
+        redirect::Policy::none()
+    };
+
+    let mut builder = ClientBuilder::new()
+        .use_rustls_tls()
+        .redirect(redirect_policy)
+        .cookie_store(config.cookie_store)
+        .timeout(Duration::from_secs(config.timeout_secs))
+        .user_agent(&config.user_agent)
+        .default_headers({
+            let mut headers = reqwest::header::HeaderMap::new();
+            if let Ok(val) = config.accept_language.parse() {
+                headers.insert(reqwest::header::ACCEPT_LANGUAGE, val);
+            }
+            headers.insert(
+                reqwest::header::ACCEPT,
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                    .parse()
+                    .unwrap(),
+            );
+            headers
+        });
+    if guarded {
+        // プロキシ経由だと宛先の名前解決はプロキシ側で行われ、resolver の検査を素通りする。
+        // また社内プロキシ自体がプライベート IP なので、検査モードではプロキシを使わない
+        builder = builder.dns_resolver(Arc::new(GuardedResolver)).no_proxy();
+    }
+    builder.build().expect("failed to build HTTP client")
 }
 
 /// reqwest のエラーを FetchError に分類する。
@@ -281,7 +373,7 @@ mod tests {
     fn deny_config() -> HttpConfig {
         HttpConfig {
             timeout_secs: 5,
-            deny_private_network: true,
+            private_network: PrivateNetworkPolicy::DenyAlways,
             ..Default::default()
         }
     }
@@ -415,5 +507,71 @@ mod tests {
             matches!(err, FetchError::BodyTooLarge { limit: 1000 }),
             "{err:?}"
         );
+    }
+
+    // --- 起点の公開性による派生取得の検査（SSRF） ---
+
+    #[tokio::test]
+    async fn guard_public_origin_allows_private_origin() {
+        // ローカルの開発サーバーを直接読む使い方は従来どおり通す
+        let port = serve(ok_html).await;
+        let fetcher = HttpFetcher::new(HttpConfig::default());
+        let url = Url::parse(&format!("http://127.0.0.1:{}/", port)).unwrap();
+        assert_eq!(fetcher.derived_guard(&url).await, DerivedGuard::Allow);
+        assert!(fetcher.fetch(&url).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn deny_always_guards_every_origin() {
+        let fetcher = HttpFetcher::new(deny_config());
+        let url = Url::parse("http://127.0.0.1/").unwrap();
+        assert_eq!(fetcher.derived_guard(&url).await, DerivedGuard::Enforce);
+    }
+
+    #[tokio::test]
+    async fn allow_policy_never_guards_but_enforce_is_still_honored() {
+        let port = serve(ok_html).await;
+        let fetcher = HttpFetcher::new(HttpConfig {
+            timeout_secs: 5,
+            private_network: PrivateNetworkPolicy::Allow,
+            ..Default::default()
+        });
+        let url = Url::parse(&format!("http://127.0.0.1:{}/", port)).unwrap();
+        assert_eq!(fetcher.derived_guard(&url).await, DerivedGuard::Allow);
+        // 明示的な Enforce は方針より優先する（黙って無視しない）
+        let err = fetcher
+            .fetch_with_guard(&url, DerivedGuard::Enforce)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FetchError::Blocked { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn derived_targets_are_blocked_when_the_origin_is_public() {
+        // 公開ページのフレームが内部アドレスを指す場合、その取得は拒否される
+        let port = serve(ok_html).await;
+        let fetcher = HttpFetcher::new(HttpConfig {
+            timeout_secs: 5,
+            ..Default::default()
+        });
+        let internal = Url::parse(&format!("http://127.0.0.1:{}/", port)).unwrap();
+        let err = fetcher
+            .fetch_with_guard(&internal, DerivedGuard::Enforce)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FetchError::Blocked { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn redirect_hops_to_private_targets_are_rejected_only_when_guarded() {
+        let hop = |u: &str| Url::parse(u).unwrap();
+        // 検査モードでは内部アドレスへのホップを拒否する
+        let err = check_redirect_target(&hop("http://169.254.169.254/latest/"), true).unwrap_err();
+        assert!(err.contains("private network address"), "{err}");
+        assert!(check_redirect_target(&hop("http://127.0.0.1:8080/"), true).is_err());
+        // 非検査モードでは通す（ローカル開発の意図を尊重する）
+        assert!(check_redirect_target(&hop("http://127.0.0.1:8080/"), false).is_ok());
+        // スキーム検査はモードに関係なく効く
+        assert!(check_redirect_target(&hop("ftp://127.0.0.1/"), false).is_err());
     }
 }

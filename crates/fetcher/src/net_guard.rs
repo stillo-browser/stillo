@@ -118,6 +118,45 @@ pub fn check_url(url: &Url, deny_private: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// 宛先を DNS 解決まで含めて検査する。
+///
+/// reqwest の resolver を差し替えられない経路（CDP 委譲で Chrome に投げる URL、その最終 URL）の
+/// 事前・事後検査に使う。`check_url` は IP リテラルしか見ないため、ホスト名はここで解決して判定する。
+pub async fn check_target(url: &Url, deny_private: bool) -> Result<(), String> {
+    check_url(url, deny_private)?;
+    if !deny_private {
+        return Ok(());
+    }
+    let Some(host) = url.host_str() else {
+        return Err("URL has no host".to_owned());
+    };
+    // IP リテラルは check_url が判定済み
+    if matches!(url.host(), Some(Host::Ipv4(_)) | Some(Host::Ipv6(_))) {
+        return Ok(());
+    }
+    let addrs: Vec<SocketAddr> = match tokio::net::lookup_host((host, 0)).await {
+        Ok(addrs) => addrs.collect(),
+        // 解決できないホストは取得できない。判定不能を「許可」と読ませないため失敗にする
+        Err(e) => return Err(format!("failed to resolve {}: {}", host, e)),
+    };
+    if let Some(bad) = addrs.iter().find(|a| is_blocked_ip(a.ip())) {
+        return Err(format!(
+            "{} resolves to private network address {}",
+            host,
+            bad.ip()
+        ));
+    }
+    Ok(())
+}
+
+/// 解決済み IP の集合が「空ではなく、すべて公開アドレス」かを返す。
+///
+/// 起点が公開アドレスなら、そこから派生する取得（リダイレクト・フレーム・JS 遷移）も
+/// 公開アドレスに限定する、という判断に使う。
+pub fn all_public(ips: &[IpAddr]) -> bool {
+    !ips.is_empty() && ips.iter().all(|ip| !is_blocked_ip(*ip))
+}
+
 /// 解決結果に拒否対象の IP が1つでも含まれれば失敗させる DNS resolver。
 ///
 /// 拒否対象だけを除外して残りで接続する方式は取らない。公開 IP とプライベート IP を
