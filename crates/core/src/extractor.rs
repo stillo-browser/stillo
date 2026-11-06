@@ -1,3 +1,4 @@
+mod depth_guard;
 pub mod readability;
 pub mod spa_detection;
 
@@ -124,15 +125,61 @@ fn decode_bytes(raw: &RawHtml) -> String {
 /// 実在するページの DOM 深さは通常 100 未満なので、512 で切っても本文は失われない。
 const MAX_DOM_DEPTH: usize = 512;
 
+/// パースを打ち切る DOM の深さ。
+///
+/// html5ever のパース時間はネストの深さの二乗で増える（release ビルドで深さ 4 万・200KB の入力に約 4 秒）。
+/// fetcher のレスポンス上限（10MB）いっぱいに <div> を並べると数時間かかる計算になり、
+/// MCP 経由で渡された 1 ページでプロセスが応答しなくなる。
+/// MAX_DOM_DEPTH より深い部分は切り捨てるので、それより先をパースし続けても得るものはない。
+const PARSE_ABORT_DEPTH: usize = MAX_DOM_DEPTH * 2;
+
+/// パーサーへ入力を渡す単位。深さの確認はチャンクの境界でしかできないため、
+/// 1 チャンクで増えうる深さ（<div> 1 個 5 バイトとして約 1600）が二乗の計算量で問題にならない大きさにする
+const PARSE_CHUNK_BYTES: usize = 8 * 1024;
+
 /// HTML をパースし、MAX_DOM_DEPTH を超える部分木を切り捨てた DOM を返す。
 /// core 内で html5ever の DOM を走査する処理は、この関数を経由してパースすること。
+///
+/// DOM が PARSE_ABORT_DEPTH より深くなった時点で残りの入力を読まずにパースを終える。
+/// 打ち切った位置までの DOM は返すので、通常のページ（深さ 100 未満）の結果は変わらない。
 pub(crate) fn parse_html(html: &str) -> RcDom {
-    let dom = parse_document(RcDom::default(), Default::default())
-        .from_utf8()
-        .read_from(&mut html.as_bytes())
-        .unwrap_or_default();
+    let max_depth = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let mut parser = parse_document(
+        depth_guard::DepthTrackingSink::new(max_depth.clone()),
+        Default::default(),
+    );
+
+    let mut rest = html;
+    while !rest.is_empty() {
+        let chunk = &rest[..char_floor(rest, PARSE_CHUNK_BYTES)];
+        rest = &rest[chunk.len()..];
+        parser.process(chunk.into());
+        if max_depth.get() > PARSE_ABORT_DEPTH {
+            break;
+        }
+    }
+
+    let dom = parser.finish();
     truncate_deep_nodes(&dom.document, MAX_DOM_DEPTH);
     dom
+}
+
+/// `s` の先頭 `max` バイト以内で、最も後ろの文字境界の位置を返す。
+/// ただし `max` 以内に境界がない場合（1 文字が max バイトを超えることはないが念のため）は最初の文字の終端を返し、
+/// 必ず 1 文字以上進むことを保証する
+fn char_floor(s: &str, max: usize) -> usize {
+    if s.len() <= max {
+        return s.len();
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end == 0 {
+        s.chars().next().map_or(s.len(), char::len_utf8)
+    } else {
+        end
+    }
 }
 
 /// 深さ max_depth に達したノードの子をすべて外す。
@@ -299,6 +346,92 @@ mod tests {
         // 深さ上限より深い位置のリンクは切り捨てられる
         assert!(extractor.extract_links(&raw).is_empty());
         crate::search::parse_ddg_results(&html);
+    }
+
+    /// 要素名とテキストを文書順に並べた文字列。パース結果の同一性比較用
+    fn dom_signature(dom: &RcDom) -> String {
+        let mut out = String::new();
+        let mut stack = vec![(dom.document.clone(), 0usize)];
+        while let Some((n, depth)) = stack.pop() {
+            match &n.data {
+                NodeData::Element { name, .. } => out.push_str(&format!("{depth}<{}>", name.local)),
+                NodeData::Text { contents } => out.push_str(&contents.borrow()),
+                _ => {}
+            }
+            for c in n.children.borrow().iter().rev() {
+                stack.push((c.clone(), depth + 1));
+            }
+        }
+        out
+    }
+
+    /// 深さ 4 万の入力は、ガードなしでは release ビルドでも約 4 秒かかっていた（二乗の計算量）。
+    /// 打ち切り後は深さ PARSE_ABORT_DEPTH 程度までしかパースしないので、debug ビルドでも一瞬で終わる
+    #[test]
+    fn test_parse_stops_early_on_pathological_nesting() {
+        let html = format!(
+            "<html><body><p>before</p>{}x</body></html>",
+            "<div>".repeat(40_000)
+        );
+        let start = std::time::Instant::now();
+        let dom = parse_html(&html);
+        // 閾値は二乗の計算量への退行だけを検出するための緩い値（CI ランナーの性能差で誤検知しないため）
+        assert!(start.elapsed().as_secs_f64() < 5.0, "{:?}", start.elapsed());
+        assert!(dom_signature(&dom).contains("before"));
+    }
+
+    /// DepthTrackingSink だけでパースし、記録された最大深さを返す
+    fn tracked_max_depth(html: &str) -> usize {
+        let max_depth = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        parse_document(
+            depth_guard::DepthTrackingSink::new(max_depth.clone()),
+            Default::default(),
+        )
+        .one(html);
+        max_depth.get()
+    }
+
+    #[test]
+    fn test_depth_tracking_counts_plain_nesting() {
+        let depth = tracked_max_depth(&format!("<html><body>{}x", "<div>".repeat(1_000)));
+        // html と body の分を加えた深さになる
+        assert!((1_000..=1_010).contains(&depth), "{depth}");
+    }
+
+    /// <template> の中身は別の fragment に入るため、深さを template から引き継がないと
+    /// 入れ子の <template> で深さが増えず、ガードをすり抜けられる
+    #[test]
+    fn test_depth_tracking_counts_nested_templates() {
+        let depth = tracked_max_depth(&format!("<html><body>{}x", "<template>".repeat(1_000)));
+        assert!(depth >= 1_000, "{depth}");
+    }
+
+    /// チャンクの境界がタグ・属性・マルチバイト文字の途中に来ても、一括でパースした結果と同じになること
+    #[test]
+    fn test_chunked_parse_matches_single_pass() {
+        let mut html = String::from("<html><head><title>題名</title></head><body>");
+        for i in 0..2_000 {
+            html.push_str(&format!(
+                "<div class=\"item item-{i}\"><p>段落{i} &amp; テキスト <a href=\"/p/{i}?a=1&amp;b=2\">リンク{i}</a></p><ul><li>一<li>二</ul></div>"
+            ));
+        }
+        html.push_str("</body></html>");
+        assert!(html.len() > PARSE_CHUNK_BYTES * 10);
+
+        let single = parse_document(RcDom::default(), Default::default())
+            .from_utf8()
+            .read_from(&mut html.as_bytes())
+            .unwrap();
+        assert_eq!(dom_signature(&parse_html(&html)), dom_signature(&single));
+    }
+
+    #[test]
+    fn test_char_floor_never_splits_a_character() {
+        let s = "aあいう";
+        assert_eq!(char_floor(s, 2), 1);
+        assert_eq!(char_floor(s, 4), 4);
+        assert_eq!(char_floor(s, 100), s.len());
+        assert_eq!(char_floor("あ", 1), 3);
     }
 
     #[test]

@@ -143,7 +143,7 @@ stillo dump https://your-spa-app.example.com
 | 3 | llama.cpp | `LLAMA_CPP_BASE_URL`（モデル: `LLAMA_CPP_MODEL`、デフォルト `default`、APIキー不要） |
 | 4 | Ollama（ローカル） | `OLLAMA_BASE_URL`（例 `http://localhost:11434/`）、`OLLAMA_MODEL`（デフォルト `llama3`） |
 
-いずれも設定されていない場合はエラーになります（Ollama への暗黙の接続は行いません）。ベースURLが不正な場合もエラーになります。OpenAI互換APIを持つ任意のプロバイダー（LM Studio等）は `OPENAI_BASE_URL` と `OPENAI_API_KEY` で利用できます。`qa` / `summarize` / `extract` は、プロバイダーが未設定ならページ取得の前に設定方法を示して終了します（無駄なフェッチをしません）。
+いずれも設定されていない場合はエラーになります（Ollama への暗黙の接続は行いません）。ベースURLが不正な場合もエラーになります。OpenAI互換APIを持つ任意のプロバイダー（LM Studio等）は `OPENAI_BASE_URL` と `OPENAI_API_KEY` で利用できます。OpenAI互換のベースURLは `/v1` を含めても含めなくても構いません（`https://api.groq.com/openai/v1`、`http://proxy.local/llm` のいずれも可）。`qa` / `summarize` / `extract` は、プロバイダーが未設定ならページ取得の前に設定方法を示して終了します（無駄なフェッチをしません）。
 
 ページ本文は `<document>` タグで区切ってLLMに渡し、本文中の指示に従わないよう system プロンプトで指定しています。出力が `max_tokens` に達して途中で切れた場合、`qa`・`summarize` は警告付きで部分出力を表示し、`extract` はエラーにします。`extract --format json` はコードフェンスを外した上で JSON として検証し、解釈できない出力はエラー（終了コード 1）にします。
 
