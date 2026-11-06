@@ -5,7 +5,7 @@ pub mod read_links;
 pub mod search;
 
 use serde_json::Value;
-use stillo_fetcher::{HttpConfig, HttpFetcher};
+use stillo_fetcher::{HttpConfig, HttpFetcher, PrivateNetworkPolicy};
 
 /// MCP ツール用の HTTP フェッチャーを作る。
 ///
@@ -16,7 +16,11 @@ pub(crate) fn mcp_fetcher() -> HttpFetcher {
     let allow_private =
         std::env::var("STILLO_ALLOW_PRIVATE_NETWORK").is_ok_and(|v| v.trim() == "1");
     HttpFetcher::new(HttpConfig {
-        deny_private_network: !allow_private,
+        private_network: if allow_private {
+            PrivateNetworkPolicy::Allow
+        } else {
+            PrivateNetworkPolicy::DenyAlways
+        },
         ..Default::default()
     })
 }

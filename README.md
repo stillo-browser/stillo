@@ -67,6 +67,9 @@ stillo dump --delegate jina https://example.com
 # JS委譲を無効化（静的HTMLのみ処理）
 stillo dump --no-delegate https://example.com
 
+# 内部ネットワーク宛ての取得を許可（フレーム・リダイレクト・JS遷移も含む）
+stillo dump --allow-private http://localhost:3000
+
 # タイムアウト秒数を指定（デフォルト30秒）
 stillo dump --timeout 60 https://example.com
 
@@ -179,7 +182,9 @@ stillo qa "記事の要点は？" https://example.com/article
 
 MCP経由のページ取得は静的HTTP取得のみで、`dump` コマンドのようなSPA委譲やフレーム展開は行いません。切り詰めた場合は出力に全体長と次の `offset` を明記します。リクエストは並行処理され、`notifications/cancelled` で実行中のツール呼び出しを中断できます。JSON の形は CLI と異なり、`fetch_url` は `url` / `title` / `byline` / `body_text` / `offset` / `total_chars` / `truncated` / `next_offset` を返します（CLI の `dump --format json` は Markdown 本文を `content` で返します）。
 
-`fetch_url`・`read_links`・`extract_structured` は取得先URLをLLMが決めるため、loopback・プライベートアドレス（RFC1918）・リンクローカル（169.254.0.0/16 等）・ULA への接続を既定で拒否します。判定はDNS解決後のIPとリダイレクトの各ホップに対して行います。拒否モードでは `HTTP_PROXY` 等のプロキシ設定を使いません。ローカルの開発サーバー等を読ませる場合は `STILLO_ALLOW_PRIVATE_NETWORK=1` を設定してください。URLスキームは http/https のみ受け付けます。CLI（`stillo dump` 等）にはこの制限はありません。
+`fetch_url`・`read_links`・`extract_structured` は取得先URLをLLMが決めるため、loopback・プライベートアドレス（RFC1918）・リンクローカル（169.254.0.0/16 等）・ULA への接続を既定で拒否します。判定はDNS解決後のIPとリダイレクトの各ホップに対して行います。拒否モードでは `HTTP_PROXY` 等のプロキシ設定を使いません。ローカルの開発サーバー等を読ませる場合は `STILLO_ALLOW_PRIVATE_NETWORK=1` を設定してください。URLスキームは http/https のみ受け付けます。
+
+CLI（`stillo dump` 等）では、起点URLが公開アドレスなら、そこから派生する取得（リダイレクトの各ホップ、`<frame src>`、SPA委譲でChromeに渡すURLと遷移後の最終URL）も公開アドレスに限定します。公開ページに内部向けのリダイレクトやフレームを仕込んで本文を抜き出させ、`qa`/`summarize`/`extract` で外部LLMへ送らせる経路を塞ぐためです。ローカルの開発サーバーを直接読む場合は起点が非公開なので制限されません。派生先も含めて許可したい場合は `--allow-private`（または `STILLO_ALLOW_PRIVATE_NETWORK=1`）を指定します。
 
 ### Web検索バックエンド
 

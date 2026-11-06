@@ -16,6 +16,9 @@ pub struct SpaDelegationChain {
     http: Client,
     /// チェーン全体の期限。個々のターゲットのタイムアウトとは別に、合計時間を `--timeout` に収めるため
     timeout: Option<Duration>,
+    /// ローカルで動く委譲先（CDP）に、内部ネットワーク宛ての取得を禁じるか。
+    /// 起点が公開アドレスなら、ページ内容（JS の遷移先）も外部入力なので既定で禁じる
+    private_guard: crate::http::DerivedGuard,
 }
 
 impl SpaDelegationChain {
@@ -73,12 +76,19 @@ impl SpaDelegationChain {
             targets,
             http,
             timeout: None,
+            private_guard: crate::http::DerivedGuard::Enforce,
         }
     }
 
     /// チェーン全体の期限を設定する。期限を過ぎると実行中のターゲットを打ち切る。
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// ローカルで動く委譲先（CDP）で内部ネットワーク宛ての取得を禁じるかを設定する。
+    pub fn with_private_guard(mut self, guard: crate::http::DerivedGuard) -> Self {
+        self.private_guard = guard;
         self
     }
 
@@ -145,7 +155,7 @@ impl SpaDelegationChain {
                         port
                     )));
                 }
-                cdp::fetch_via_cdp(*port, url).await
+                cdp::fetch_via_cdp(*port, url, self.private_guard).await
             }
             DelegationTarget::PlaywrightDaemon { socket_path } => {
                 playwright::fetch_via_playwright(socket_path, url).await
