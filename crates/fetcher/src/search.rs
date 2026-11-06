@@ -110,11 +110,39 @@ pub enum SearchError {
     InvalidQuery,
 }
 
+/// 検索チェーン全体の既定の期限（秒）。バックエンドを順に試すため、1つ分より長く取る
+pub const DEFAULT_SEARCH_TIMEOUT_SECS: u64 = 25;
+
+/// 1 バックエンドあたりの HTTP タイムアウト（秒）。
+/// 全体の期限と同じ値にすると、先頭が固まった時点で残りを試さずに終わってしまうため、
+/// 常に全体の期限より短い固定値にする
+const PER_BACKEND_TIMEOUT_SECS: u64 = 20;
+
 /// 検索クエリをバックエンドチェーンで実行し、最初の成功結果を返す。
 pub async fn web_search(query: &str) -> Result<Vec<SearchResult>, SearchError> {
+    web_search_with_timeout(query, DEFAULT_SEARCH_TIMEOUT_SECS).await
+}
+
+/// 全体の期限付き検索。期限を過ぎたら残りのバックエンドを諦めてエラーを返す。
+/// 1 バックエンドあたりのタイムアウトは固定で、全体の期限とは独立に持つ。
+pub async fn web_search_with_timeout(
+    query: &str,
+    timeout_secs: u64,
+) -> Result<Vec<SearchResult>, SearchError> {
+    let total = timeout_secs.max(1);
+    match tokio::time::timeout(Duration::from_secs(total), web_search_inner(query)).await {
+        Ok(result) => result,
+        Err(_) => Err(SearchError::AllBlocked(format!(
+            "timed out after {}s; later backends were not tried",
+            total
+        ))),
+    }
+}
+
+async fn web_search_inner(query: &str) -> Result<Vec<SearchResult>, SearchError> {
     let backends = SearchBackend::from_env();
     let config = HttpConfig {
-        timeout_secs: 20,
+        timeout_secs: PER_BACKEND_TIMEOUT_SECS,
         ..Default::default()
     };
     let fetcher = HttpFetcher::new(config);
@@ -138,6 +166,15 @@ pub async fn web_search(query: &str) -> Result<Vec<SearchResult>, SearchError> {
                 failures.push(format!("{}: {}", backend.name(), e));
             }
         }
+    }
+
+    // 代替バックエンドが設定されていない場合だけ、設定方法を案内する。
+    // 既に設定済みの利用者に「設定せよ」と言うと誤った案内になる
+    if backends.len() == 1 {
+        failures.push(
+            "no alternative backend configured; set SEARXNG_URL or BRAVE_API_KEY for a more reliable search"
+                .to_owned(),
+        );
     }
 
     Err(SearchError::AllBlocked(failures.join("; ")))

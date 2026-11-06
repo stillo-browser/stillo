@@ -8,6 +8,9 @@ use url::Url;
 /// レスポンスボディ上限の既定値（10MB）。
 pub const DEFAULT_MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 
+/// 全 HTTP リクエストで使う User-Agent。クレートのバージョンに追従させる。
+pub const USER_AGENT: &str = concat!("stillo/", env!("CARGO_PKG_VERSION"));
+
 pub struct HttpConfig {
     pub timeout_secs: u64,
     pub follow_redirects: bool,
@@ -28,7 +31,7 @@ impl Default for HttpConfig {
             timeout_secs: 30,
             follow_redirects: true,
             max_redirects: 10,
-            user_agent: "stillo/0.1".to_owned(),
+            user_agent: USER_AGENT.to_owned(),
             accept_language: "ja,en;q=0.9".to_owned(),
             cookie_store: true,
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,

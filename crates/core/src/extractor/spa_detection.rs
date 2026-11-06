@@ -11,8 +11,64 @@ pub fn detect_spa(root: &Handle, text_length: usize, min_content_length: usize) 
     }
     match detect_js_framework(root) {
         Some(framework) => SpaDetection::FrameworkDetected { framework },
-        None => SpaDetection::SuspectedSpa { text_length },
+        // 本文が短いだけの静的ページを SPA と誤判定すると、委譲チェーンへの
+        // 無駄な問い合わせと警告が毎回走る（example.com でも Jina に飛んでいた）。
+        // マウント要素や大きなインラインスクリプトという JS 実行の痕跡がある場合のみ SPA とする
+        None if has_dynamic_markers(root) => SpaDetection::SuspectedSpa { text_length },
+        None => SpaDetection::Static,
     }
+}
+
+/// 本文が短いページについて、JS で後から描画される可能性があるかを判定する。
+/// 外部スクリプトは解析タグでも成り立つため根拠にしない。マウント要素と
+/// 大きなインラインスクリプトのみを見る（フレームワーク判定は呼び出し側で先に行う）。
+fn has_dynamic_markers(root: &Handle) -> bool {
+    has_script_or_mount(root)
+}
+
+fn has_script_or_mount(handle: &Handle) -> bool {
+    if let NodeData::Element { name, attrs, .. } = &handle.data {
+        let tag = name.local.as_ref();
+        let attr_ref = attrs.borrow();
+
+        if tag == "script" {
+            let inline_len: usize = handle
+                .children
+                .borrow()
+                .iter()
+                .map(|c| match &c.data {
+                    NodeData::Text { contents } => contents.borrow().len(),
+                    _ => 0,
+                })
+                .sum();
+            if inline_len > 512 {
+                return true;
+            }
+        }
+
+        if matches!(tag, "div" | "main" | "body") {
+            for attr in attr_ref.iter() {
+                if attr.name.local.as_ref() != "id" {
+                    continue;
+                }
+                if matches!(
+                    attr.value.as_ref(),
+                    "root"
+                        | "app"
+                        | "app-root"
+                        | "react-root"
+                        | "__next"
+                        | "__nuxt"
+                        | "svelte"
+                        | "___gatsby"
+                ) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    handle.children.borrow().iter().any(has_script_or_mount)
 }
 
 fn detect_js_framework(root: &Handle) -> Option<JsFramework> {
@@ -211,8 +267,12 @@ mod tests {
 
     #[test]
     fn test_text_length_counts_chars_not_bytes() {
-        // 200 文字 = 600 バイト。文字数では最小長 500 に届かない
-        let html = format!("<html><body><p>{}</p></body></html>", "あ".repeat(200));
+        // 200 文字 = 600 バイト。文字数では最小長 500 に届かない。
+        // 委譲対象になり得る構造（マウント要素）を持たせて SPA 判定まで通す
+        let html = format!(
+            "<html><body><div id=\"app\"><p>{}</p></div></body></html>",
+            "あ".repeat(200)
+        );
         assert_eq!(
             detect(&html),
             SpaDetection::SuspectedSpa { text_length: 200 }
@@ -222,7 +282,7 @@ mod tests {
     #[test]
     fn test_text_length_excludes_navigation() {
         let html = format!(
-            "<html><body><nav>{}</nav><footer>{}</footer><main><p>短い本文</p></main></body></html>",
+            "<html><body><div id=\"app\"><nav>{}</nav><footer>{}</footer><main><p>短い本文</p></main></div></body></html>",
             "menu ".repeat(200),
             "foot ".repeat(200)
         );
@@ -231,5 +291,39 @@ mod tests {
             "{:?}",
             detect(&html)
         );
+    }
+
+    /// 本文が短いだけの静的ページを SPA と誤判定しない（example.com 相当）。
+    /// 誤判定すると毎回 Chrome/Jina への委譲が走り、実行環境によっては別の内容が返る。
+    #[test]
+    fn test_short_static_page_is_not_spa() {
+        let html = r#"<html><body><h1>Example Domain</h1>
+            <p>This domain is for use in illustrative examples in documents.</p>
+            </body></html>"#;
+        assert_eq!(detect(html), SpaDetection::Static);
+    }
+
+    /// 外部スクリプトは解析タグでも成り立つので SPA の根拠にしない。
+    #[test]
+    fn test_short_page_with_only_external_script_is_not_spa() {
+        let html = r#"<html><body><p>Hello.</p><script src="/s.js"></script></body></html>"#;
+        assert_eq!(detect(html), SpaDetection::Static);
+    }
+
+    /// マウント要素があれば短いページでも委譲を試みる。
+    #[test]
+    fn test_short_page_with_mount_point_is_suspected_spa() {
+        let html = r#"<html><body><div id="app"></div></body></html>"#;
+        assert!(matches!(detect(html), SpaDetection::SuspectedSpa { .. }));
+    }
+
+    /// バンドルと思われる大きなインラインスクリプトも JS 実行の痕跡として扱う。
+    #[test]
+    fn test_large_inline_script_is_treated_as_bundle() {
+        let html = format!(
+            "<html><body><script>{}</script></body></html>",
+            "x".repeat(600)
+        );
+        assert!(matches!(detect(&html), SpaDetection::SuspectedSpa { .. }));
     }
 }

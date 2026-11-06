@@ -32,14 +32,19 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      # CLI が fetcher の cdp feature を有効にしているため、--workspace で回すと CDP 統合テストが
+      # 並列実行されて不安定になる。fetcher は次のステップで明示的に回す
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude stillo-fetcher
+
+      - name: Test fetcher (default features)
+        run: cargo test -p stillo-fetcher
 
       # 回帰検出のため warning が出たら失敗させる
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace -- -D warnings
 
-      # cdp feature は既定で無効のため、明示的にビルドしないとコンパイルエラーが検出されない
+      # cdp feature 付きのテストターゲットまで含めてコンパイルエラーを検出する
       - name: Clippy with cdp feature
         run: cargo clippy -p stillo-fetcher --features cdp --tests -- -D warnings
 
